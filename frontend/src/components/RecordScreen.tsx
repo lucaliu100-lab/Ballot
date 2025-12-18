@@ -19,6 +19,19 @@ import { API_ENDPOINTS } from '../lib/constants';
 
 // Constants
 const RECORDING_DURATION = 300; // 5 minutes in seconds
+// Reduce upload size by lowering resolution + bitrate (good enough for body-language cues)
+const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  width: { ideal: 640, max: 640 },
+  height: { ideal: 480, max: 480 },
+  frameRate: { ideal: 24, max: 24 },
+  facingMode: 'user',
+};
+
+// Target bitrates (browsers may ignore these, but most Chromium-based ones respect them)
+const RECORDER_BITS = {
+  videoBitsPerSecond: 900_000, // ~0.9 Mbps video
+  audioBitsPerSecond: 96_000,  // ~96 kbps audio
+} as const;
 
 // Props that this component receives from its parent
 interface RecordScreenProps {
@@ -161,11 +174,7 @@ function RecordScreen({
         // Request access to camera and microphone
         // This will prompt the user for permission
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: 'user', // Use front camera
-          },
+          video: VIDEO_CONSTRAINTS,
           audio: true,
         });
 
@@ -220,6 +229,7 @@ function RecordScreen({
 
     const mediaRecorder = new MediaRecorder(streamRef.current, {
       mimeType,
+      ...RECORDER_BITS,
     });
 
     // Event handler: called when data is available
