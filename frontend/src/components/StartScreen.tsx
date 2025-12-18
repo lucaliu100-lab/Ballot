@@ -7,6 +7,7 @@
 
 import { useState } from 'react';
 import { RoundData } from '../types';
+import { API_ENDPOINTS } from '../lib/constants';
 
 // Props that this component receives from its parent
 interface StartScreenProps {
@@ -25,7 +26,7 @@ function StartScreen({ onRoundStart }: StartScreenProps) {
 
     try {
       // Call our backend API to get theme and quotes
-      const response = await fetch('/api/start-round', {
+      const response = await fetch(API_ENDPOINTS.startRound, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
