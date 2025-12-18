@@ -12,8 +12,14 @@
  */
 
 import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import path from 'path';
 import fs from 'fs';
+
+// Set ffmpeg and ffprobe paths from the installers
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
 
 // ===========================================
 // CONFIGURATION

@@ -14,8 +14,12 @@
  */
 
 import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import path from 'path';
 import fs from 'fs';
+
+// Set ffmpeg path from the installer
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 // ===========================================
 // CONFIGURATION
