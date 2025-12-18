@@ -59,9 +59,10 @@ const sessionStorage: Map<string, SessionData> = new Map();
 // ===========================================
 
 // Enable CORS so frontend can call our API
-// Configure for cross-origin requests from Vercel
 app.use(cors({
-  origin: true, // Allow all origins (you can restrict to your Vercel URL later)
+  origin: process.env.NODE_ENV === 'production' 
+    ? [process.env.FRONTEND_URL || '', 'https://path-to-the-ballot.pages.dev'] 
+    : true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
