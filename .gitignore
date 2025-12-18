@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables (NEVER commit these!)
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Uploaded files (user generated content)
+backend/uploads/
+uploads/
+
+# Coverage
+coverage/
+
+# Cache
+.cache/
+.npm/
+.eslintcache
+
+# Specstory (optional - you may want to keep this)
+# .specstory/
+
+
+
+
+.specstory/

@@ -1,0 +1,618 @@
+/**
+ * RecordScreen Component
+ * 
+ * This is the main recording screen that:
+ * 1. Shows a camera preview using MediaDevices.getUserMedia
+ * 2. Displays countdown timer (5 min + remaining prep time)
+ * 3. Records audio + video using MediaRecorder API
+ * 4. Uploads the recorded blob to the backend
+ * 
+ * Features:
+ * - Large video preview that takes most of the screen
+ * - Start recording button positioned inside the video frame
+ * - Button fades when recording starts
+ */
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { UploadResponse } from '../types';
+import { API_ENDPOINTS } from '../lib/constants';
+
+// Constants
+const RECORDING_DURATION = 300; // 5 minutes in seconds
+
+// Props that this component receives from its parent
+interface RecordScreenProps {
+  selectedQuote: string;                        // The quote to display during recording
+  remainingPrepTime?: number;                   // Remaining prep time in seconds (added to 5 min)
+  onUploadComplete: (response: UploadResponse) => void;  // Called after successful upload
+}
+
+function RecordScreen({ 
+  selectedQuote, 
+  remainingPrepTime = 0,
+  onUploadComplete 
+}: RecordScreenProps) {
+  // ==========================================
+  // STATE MANAGEMENT
+  // ==========================================
+  
+  // Recording state: 'idle' | 'recording' | 'stopped' | 'uploading'
+  const [recordingState, setRecordingState] = useState<string>('idle');
+  
+  // Error message if something goes wrong
+  const [error, setError] = useState<string | null>(null);
+  
+  // The recorded video blob (binary data)
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  
+  // URL to preview the recorded video
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // Total available time (5 min + remaining prep time)
+  const totalTime = RECORDING_DURATION + remainingPrepTime;
+
+  // Countdown timer (time remaining to record)
+  const [timeRemaining, setTimeRemaining] = useState<number>(totalTime);
+
+  // Recording duration (how long we've been recording)
+  const [recordingDuration, setRecordingDuration] = useState<number>(0);
+
+  // ==========================================
+  // REFS (persistent references across renders)
+  // ==========================================
+  
+  // Reference to the video element showing camera preview
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  // Reference to the video element showing recorded preview
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  
+  // Reference to the MediaRecorder instance
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  
+  // Reference to the media stream (camera + microphone)
+  const streamRef = useRef<MediaStream | null>(null);
+  
+  // Array to store recorded video chunks
+  const chunksRef = useRef<Blob[]>([]);
+
+  // Reference to the countdown timer interval
+  const countdownRef = useRef<number | null>(null);
+
+  // Reference to the recording duration timer
+  const durationRef = useRef<number | null>(null);
+
+  // Format seconds into MM:SS display
+  const formatTime = useCallback((seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }, []);
+
+  // Start the countdown timer
+  const startCountdown = useCallback(() => {
+    setTimeRemaining(totalTime);
+    countdownRef.current = window.setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          // Time's up - stop recording
+          if (countdownRef.current) {
+            clearInterval(countdownRef.current);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [totalTime]);
+
+  // Start recording duration timer
+  const startDurationTimer = useCallback(() => {
+    setRecordingDuration(0);
+    durationRef.current = window.setInterval(() => {
+      setRecordingDuration((prev) => prev + 1);
+    }, 1000);
+  }, []);
+
+  // Stop all timers
+  const stopTimers = useCallback(() => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    if (durationRef.current) {
+      clearInterval(durationRef.current);
+      durationRef.current = null;
+    }
+  }, []);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      stopTimers();
+    };
+  }, [stopTimers]);
+
+  // Auto-stop recording when countdown reaches 0
+  useEffect(() => {
+    if (timeRemaining <= 0 && recordingState === 'recording') {
+      stopRecording();
+    }
+  }, [timeRemaining, recordingState]);
+
+  // ==========================================
+  // SETUP: Request camera access on mount
+  // ==========================================
+  useEffect(() => {
+    // Function to initialize camera and microphone
+    const initializeMedia = async () => {
+      try {
+        // Request access to camera and microphone
+        // This will prompt the user for permission
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: 'user', // Use front camera
+          },
+          audio: true,
+        });
+
+        // Store the stream reference
+        streamRef.current = stream;
+
+        // Connect the stream to the video element for preview
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        // Handle errors (user denied permission, no camera, etc.)
+        console.error('Failed to access camera:', err);
+        setError(
+          'Unable to access camera/microphone. Please allow permissions and try again.'
+        );
+      }
+    };
+
+    initializeMedia();
+
+    // Cleanup: stop all tracks when component unmounts
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  // ==========================================
+  // RECORDING FUNCTIONS
+  // ==========================================
+
+  /**
+   * Start recording video and audio
+   */
+  const startRecording = () => {
+    // Make sure we have a stream
+    if (!streamRef.current) {
+      setError('No media stream available');
+      return;
+    }
+
+    // Reset chunks array for new recording
+    chunksRef.current = [];
+
+    // Create MediaRecorder with the stream
+    // Try to use webm format (supported by most browsers)
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+
+    const mediaRecorder = new MediaRecorder(streamRef.current, {
+      mimeType,
+    });
+
+    // Event handler: called when data is available
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunksRef.current.push(event.data);
+      }
+    };
+
+    // Event handler: called when recording stops
+    mediaRecorder.onstop = () => {
+      // Combine all chunks into a single blob
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      setRecordedBlob(blob);
+      
+      // Create a URL for preview
+      const url = URL.createObjectURL(blob);
+      setPreviewUrl(url);
+      
+      setRecordingState('stopped');
+      stopTimers();
+    };
+
+    // Store reference and start recording
+    mediaRecorderRef.current = mediaRecorder;
+    mediaRecorder.start(1000); // Collect data every 1 second
+    setRecordingState('recording');
+    startCountdown();
+    startDurationTimer();
+  };
+
+  /**
+   * Stop the current recording
+   */
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recordingState === 'recording') {
+      mediaRecorderRef.current.stop();
+      stopTimers();
+    }
+  };
+
+  /**
+   * Discard the recording and start over
+   */
+  const discardRecording = () => {
+    // Clean up the preview URL
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    
+    setRecordedBlob(null);
+    setPreviewUrl(null);
+    setRecordingState('idle');
+    setTimeRemaining(totalTime);
+    setRecordingDuration(0);
+  };
+
+  /**
+   * Upload the recorded video to the backend
+   */
+  const uploadRecording = async () => {
+    if (!recordedBlob) {
+      setError('No recording to upload');
+      return;
+    }
+
+    setRecordingState('uploading');
+    setError(null);
+
+    try {
+      // Create FormData to send the file
+      const formData = new FormData();
+      formData.append('file', recordedBlob, 'recording.webm');
+
+      // Send to our backend
+      const response = await fetch(API_ENDPOINTS.upload, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const data: UploadResponse = await response.json();
+      
+      // Notify parent component of success
+      onUploadComplete(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+      setRecordingState('stopped');
+    }
+  };
+
+  // ==========================================
+  // RENDER UI
+  // ==========================================
+
+  return (
+    <div style={styles.container}>
+      {/* Quote display - compact at top */}
+      <div style={styles.quoteBar}>
+        <p style={styles.quoteText}>"{selectedQuote}"</p>
+      </div>
+
+      {/* Main video area - takes most of the screen */}
+      <div style={styles.videoWrapper}>
+        <div style={styles.videoContainer}>
+          {/* Camera preview (shown when not reviewing a recording) */}
+          {!previewUrl && (
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              style={styles.video}
+              className="video-preview"
+            />
+          )}
+          
+          {/* Recording preview (shown after recording stops) */}
+          {previewUrl && (
+            <video
+              ref={previewVideoRef}
+              src={previewUrl}
+              controls
+              playsInline
+              style={styles.video}
+            />
+          )}
+
+          {/* Timer overlay - top right */}
+          <div style={styles.timerOverlay}>
+            <div style={styles.timerBox}>
+              <span style={styles.timerLabel}>
+                {recordingState === 'recording' ? 'TIME LEFT' : 'AVAILABLE'}
+              </span>
+              <span style={{
+                ...styles.timerValue,
+                color: timeRemaining < 60 && recordingState === 'recording' 
+                  ? '#ef4444' 
+                  : '#ffffff',
+              }}>
+                {formatTime(timeRemaining)}
+              </span>
+            </div>
+          </div>
+
+          {/* Recording indicator - top left */}
+          {recordingState === 'recording' && (
+            <div style={styles.recordingIndicator}>
+              <span style={styles.recordingDot}>●</span>
+              <span>REC</span>
+              <span style={styles.recordingDuration}>{formatTime(recordingDuration)}</span>
+            </div>
+          )}
+
+          {/* Start Recording Button - inside video frame, center bottom */}
+          {recordingState === 'idle' && (
+            <button
+              onClick={startRecording}
+              style={styles.startButtonInFrame}
+            >
+              <span style={styles.startIcon}>●</span>
+              Start Recording
+            </button>
+          )}
+
+          {/* Stop Recording Button - inside video frame, faded appearance */}
+          {recordingState === 'recording' && (
+            <button
+              onClick={stopRecording}
+              style={styles.stopButtonInFrame}
+            >
+              <span style={styles.stopIcon}>■</span>
+              Stop Recording
+            </button>
+          )}
+        </div>
+
+        {/* Error message */}
+        {error && (
+          <div style={styles.error}>
+            {error}
+          </div>
+        )}
+
+        {/* Post-recording controls - below video */}
+        {recordingState === 'stopped' && (
+          <div style={styles.postRecordControls}>
+            <button
+              onClick={uploadRecording}
+              style={styles.uploadButton}
+            >
+              Upload Recording
+            </button>
+            <button
+              onClick={discardRecording}
+              style={styles.discardButton}
+            >
+              Discard & Retry
+            </button>
+          </div>
+        )}
+
+        {/* Uploading indicator */}
+        {recordingState === 'uploading' && (
+          <div style={styles.postRecordControls}>
+            <button disabled style={styles.uploadingButton}>
+              Uploading...
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Styles for this component
+const styles: Record<string, React.CSSProperties> = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
+    background: '#0a0a0a',
+    padding: '16px',
+  },
+  quoteBar: {
+    background: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: '8px',
+    padding: '12px 20px',
+    marginBottom: '16px',
+  },
+  quoteText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: '0.95rem',
+    margin: 0,
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  videoWrapper: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  videoContainer: {
+    position: 'relative',
+    flex: 1,
+    borderRadius: '12px',
+    overflow: 'hidden',
+    background: '#000',
+    border: '2px solid rgba(255, 255, 255, 0.1)',
+  },
+  video: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  timerOverlay: {
+    position: 'absolute',
+    top: '20px',
+    right: '20px',
+  },
+  timerBox: {
+    background: 'rgba(0, 0, 0, 0.7)',
+    backdropFilter: 'blur(10px)',
+    borderRadius: '12px',
+    padding: '12px 20px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+  },
+  timerLabel: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: '0.7rem',
+    fontWeight: 600,
+    letterSpacing: '1px',
+    marginBottom: '4px',
+  },
+  timerValue: {
+    color: '#ffffff',
+    fontSize: '1.8rem',
+    fontWeight: 700,
+    fontFamily: 'monospace',
+  },
+  recordingIndicator: {
+    position: 'absolute',
+    top: '20px',
+    left: '20px',
+    background: 'rgba(220, 38, 38, 0.9)',
+    backdropFilter: 'blur(10px)',
+    color: '#ffffff',
+    padding: '10px 20px',
+    borderRadius: '12px',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  recordingDot: {
+    animation: 'blink 1s infinite',
+    fontSize: '1.2rem',
+  },
+  recordingDuration: {
+    fontFamily: 'monospace',
+    fontSize: '0.9rem',
+  },
+  // Start button - solid white, positioned inside video frame at bottom center
+  startButtonInFrame: {
+    position: 'absolute',
+    bottom: '40px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(255, 255, 255, 0.95)',
+    color: '#111111',
+    border: 'none',
+    padding: '18px 40px',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    borderRadius: '50px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+    transition: 'all 0.2s ease',
+  },
+  startIcon: {
+    color: '#dc2626',
+    fontSize: '1.4rem',
+  },
+  // Stop button - faded appearance when recording
+  stopButtonInFrame: {
+    position: 'absolute',
+    bottom: '40px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(255, 255, 255, 0.3)',
+    color: '#ffffff',
+    border: '2px solid rgba(255, 255, 255, 0.4)',
+    padding: '18px 40px',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    borderRadius: '50px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    backdropFilter: 'blur(10px)',
+    transition: 'all 0.2s ease',
+  },
+  stopIcon: {
+    fontSize: '1rem',
+  },
+  error: {
+    padding: '16px 20px',
+    background: 'rgba(220, 38, 38, 0.1)',
+    border: '1px solid #dc2626',
+    borderRadius: '8px',
+    color: '#ef4444',
+    marginTop: '16px',
+  },
+  postRecordControls: {
+    display: 'flex',
+    gap: '16px',
+    justifyContent: 'center',
+    marginTop: '20px',
+    paddingBottom: '20px',
+  },
+  uploadButton: {
+    background: '#10b981',
+    color: '#ffffff',
+    border: 'none',
+    padding: '16px 40px',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    borderRadius: '50px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  discardButton: {
+    background: 'transparent',
+    color: '#ffffff',
+    border: '2px solid rgba(255, 255, 255, 0.3)',
+    padding: '16px 40px',
+    fontSize: '1.1rem',
+    fontWeight: 500,
+    borderRadius: '50px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+  uploadingButton: {
+    background: 'rgba(255, 255, 255, 0.1)',
+    color: 'rgba(255, 255, 255, 0.5)',
+    border: 'none',
+    padding: '16px 40px',
+    fontSize: '1.1rem',
+    fontWeight: 600,
+    borderRadius: '50px',
+    cursor: 'not-allowed',
+  },
+};
+
+export default RecordScreen;

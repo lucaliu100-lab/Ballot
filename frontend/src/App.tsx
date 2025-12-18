@@ -1,0 +1,451 @@
+/**
+ * Main App Component - Speech Practice Application
+ * 
+ * This component manages the overall flow of the application:
+ * 1. Authentication - User signs in with email
+ * 2. Start Screen - User clicks "Start Round"
+ * 3. Quote Selection - User picks a quote to speak about
+ * 4. Prep Timer - 2 minute countdown to prepare
+ * 5. Record Screen - Camera preview and recording
+ * 6. Processing Screen - AI analyzes speech and body language
+ * 7. Report Screen - Shows feedback with redo/new round options
+ * 
+ * The flow is managed using a simple state machine pattern.
+ * User sessions are persisted to InstantDB for history tracking.
+ */
+
+import { useState } from 'react';
+
+// Import InstantDB
+import { db } from './lib/instant';
+
+// Import shared utilities and constants
+import { PREP_TIMER_DURATION, API_ENDPOINTS } from './lib/constants';
+import { extractFilename } from './lib/utils';
+
+// Import types
+import { FlowStep, RoundData, UploadResponse, DebateFeedback, SpeechStats } from './types';
+
+// Import all screen components
+import Login from './components/Login';
+import StartScreen from './components/StartScreen';
+import ThemePreview from './components/ThemePreview';
+import QuoteSelection from './components/QuoteSelection';
+import PrepTimer from './components/PrepTimer';
+import RecordScreen from './components/RecordScreen';
+import UploadSuccess from './components/UploadSuccess';
+import FeedbackReport from './components/FeedbackReport';
+import History from './components/History';
+
+function App() {
+  // ==========================================
+  // AUTHENTICATION
+  // ==========================================
+  
+  const { isLoading: authLoading, user, error: authError } = db.useAuth();
+
+  // ==========================================
+  // STATE MANAGEMENT
+  // ==========================================
+  
+  // Current step in the flow
+  const [currentStep, setCurrentStep] = useState<FlowStep>('start');
+  
+  // Data from the /api/start-round API
+  const [roundData, setRoundData] = useState<RoundData | null>(null);
+  
+  // The quote the user selected
+  const [selectedQuote, setSelectedQuote] = useState<string>('');
+  
+  // Response from the upload API
+  const [uploadResponse, setUploadResponse] = useState<UploadResponse | null>(null);
+
+  // Feedback from DeepSeek
+  const [feedback, setFeedback] = useState<DebateFeedback | null>(null);
+  const [isFeedbackMock, setIsFeedbackMock] = useState(false);
+
+  // Transcript and body language analysis (needed for saving to DB)
+  const [transcript, setTranscript] = useState<string>('');
+  const [bodyLanguageAnalysis, setBodyLanguageAnalysis] = useState<string>('');
+  const [speechStats, setSpeechStats] = useState<SpeechStats | undefined>(undefined);
+
+  // Show history screen
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Loading state for changing theme
+  const [isChangingTheme, setIsChangingTheme] = useState(false);
+
+  // Remaining prep time (passed to RecordScreen)
+  const [remainingPrepTime, setRemainingPrepTime] = useState(0);
+
+  // ==========================================
+  // FLOW HANDLERS
+  // ==========================================
+
+  /**
+   * Called when the round data is loaded from the API
+   * Move to theme preview step (not directly to quote selection)
+   */
+  const handleRoundStart = (data: RoundData) => {
+    setRoundData(data);
+    setCurrentStep('theme-preview');
+  };
+
+  /**
+   * Called when user wants to change the theme
+   * Fetches a new theme from the API
+   */
+  const handleChangeTheme = async () => {
+    setIsChangingTheme(true);
+    try {
+      const response = await fetch(API_ENDPOINTS.startRound, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const data: RoundData = await response.json();
+        setRoundData(data);
+      }
+    } catch (err) {
+      console.error('Failed to change theme:', err);
+    } finally {
+      setIsChangingTheme(false);
+    }
+  };
+
+  /**
+   * Called when user ends pre-round preparation
+   * Moves from theme preview to quote selection
+   */
+  const handleEndPrep = () => {
+    setCurrentStep('quote-select');
+  };
+
+  /**
+   * Called when the user selects a quote
+   * Move to prep timer step
+   */
+  const handleQuoteSelect = (quote: string) => {
+    setSelectedQuote(quote);
+    setCurrentStep('prep');
+  };
+
+  /**
+   * Called when the prep timer finishes or user skips
+   * Move to recording step, passing remaining time
+   */
+  const handleTimerComplete = (remainingTime: number = 0) => {
+    setRemainingPrepTime(remainingTime);
+    setCurrentStep('record');
+  };
+
+  /**
+   * Called when the video upload is complete
+   * Move to processing step
+   */
+  const handleUploadComplete = (response: UploadResponse) => {
+    setUploadResponse(response);
+    setCurrentStep('processing');
+  };
+
+  /**
+   * Called when all processing is complete and feedback is ready
+   * Move to report step
+   */
+  const handleFeedbackReady = (
+    feedbackData: DebateFeedback, 
+    isMock: boolean,
+    transcriptData: string,
+    bodyLanguageData: string,
+    speechStatsData?: SpeechStats
+  ) => {
+    setFeedback(feedbackData);
+    setIsFeedbackMock(isMock);
+    setTranscript(transcriptData);
+    setBodyLanguageAnalysis(bodyLanguageData);
+    setSpeechStats(speechStatsData);
+    setCurrentStep('report');
+  };
+
+  /**
+   * Redo the same round with the same quote
+   * Goes back to prep timer, keeping the same quote selected
+   */
+  const handleRedoRound = () => {
+    // Clear the upload and feedback, but keep round data and quote
+    setUploadResponse(null);
+    setFeedback(null);
+    setIsFeedbackMock(false);
+    // Go back to prep timer
+    setCurrentStep('prep');
+  };
+
+  /**
+   * Return to homepage (start screen)
+   * Resets everything and goes back to start
+   */
+  const handleGoHome = () => {
+    setCurrentStep('start');
+    setRoundData(null);
+    setSelectedQuote('');
+    setUploadResponse(null);
+    setFeedback(null);
+    setIsFeedbackMock(false);
+    setTranscript('');
+    setBodyLanguageAnalysis('');
+    setSpeechStats(undefined);
+  };
+
+  /**
+   * Start a new round immediately
+   * Fetches new theme and goes directly to theme preview
+   */
+  const handleNewRound = async () => {
+    // Clear previous data
+    setSelectedQuote('');
+    setUploadResponse(null);
+    setFeedback(null);
+    setIsFeedbackMock(false);
+    setTranscript('');
+    setBodyLanguageAnalysis('');
+    setSpeechStats(undefined);
+    
+    // Fetch new round data
+    try {
+      const response = await fetch(API_ENDPOINTS.startRound, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const data: RoundData = await response.json();
+        setRoundData(data);
+        setCurrentStep('theme-preview');
+      } else {
+        // Fallback to start screen if fetch fails
+        setCurrentStep('start');
+        setRoundData(null);
+      }
+    } catch (err) {
+      console.error('Failed to start new round:', err);
+      setCurrentStep('start');
+      setRoundData(null);
+    }
+  };
+
+  // ==========================================
+  // RENDER CURRENT STEP
+  // ==========================================
+
+  /**
+   * Render the appropriate component based on current step
+   * This is a simple state machine pattern
+   */
+  const renderCurrentStep = () => {
+    switch (currentStep) {
+      case 'start':
+        // Show the initial start screen
+        return <StartScreen onRoundStart={handleRoundStart} />;
+
+      case 'theme-preview':
+        // Show theme preview (only if we have round data)
+        if (!roundData) return null;
+        return (
+          <ThemePreview
+            roundData={roundData}
+            onChangeTheme={handleChangeTheme}
+            onEndPrep={handleEndPrep}
+            isChangingTheme={isChangingTheme}
+          />
+        );
+
+      case 'quote-select':
+        // Show quote selection (only if we have round data)
+        if (!roundData) return null;
+        return (
+          <QuoteSelection
+            roundData={roundData}
+            onQuoteSelect={handleQuoteSelect}
+          />
+        );
+
+      case 'prep':
+        // Show the preparation timer
+        return (
+          <PrepTimer
+            selectedQuote={selectedQuote}
+            durationSeconds={PREP_TIMER_DURATION}
+            onTimerComplete={handleTimerComplete}
+          />
+        );
+
+      case 'record':
+        // Show the recording screen with remaining prep time for extended countdown
+        return (
+          <RecordScreen
+            selectedQuote={selectedQuote}
+            remainingPrepTime={remainingPrepTime}
+            onUploadComplete={handleUploadComplete}
+          />
+        );
+
+      case 'processing':
+        // Show the processing screen
+        if (!uploadResponse || !roundData) return null;
+        return (
+          <UploadSuccess
+            uploadResponse={uploadResponse}
+            theme={roundData.theme}
+            quote={selectedQuote}
+            onFeedbackReady={handleFeedbackReady}
+          />
+        );
+
+      case 'report':
+        // Show the feedback report (only if we have feedback)
+        if (!feedback || !roundData) return null;
+        return (
+          <FeedbackReport
+            feedback={feedback}
+            theme={roundData.theme}
+            quote={selectedQuote}
+            transcript={transcript}
+            bodyLanguageAnalysis={bodyLanguageAnalysis}
+            videoFilename={extractFilename(uploadResponse?.filePath || '')}
+            speechStats={speechStats}
+            isMock={isFeedbackMock}
+            onRedoRound={handleRedoRound}
+            onNewRound={handleNewRound}
+            onGoHome={handleGoHome}
+          />
+        );
+
+      default:
+        return <StartScreen onRoundStart={handleRoundStart} />;
+    }
+  };
+
+  // ==========================================
+  // AUTH LOADING/ERROR STATES
+  // ==========================================
+
+  // Show loading spinner while checking auth
+  if (authLoading) {
+    return (
+      <div style={styles.app}>
+        <div style={styles.loadingContainer}>
+          <div style={styles.spinner} />
+          <p style={styles.loadingText}>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login screen if not authenticated
+  if (!user) {
+    return <Login />;
+  }
+
+  // Show error if auth failed (but user can still try to use app)
+  if (authError) {
+    console.error('Auth error:', authError);
+  }
+
+  // ==========================================
+  // MAIN RENDER (AUTHENTICATED)
+  // ==========================================
+
+  // Show history screen if requested
+  if (showHistory) {
+    return <History onClose={() => setShowHistory(false)} />;
+  }
+
+  return (
+    <div style={styles.app}>
+      {/* User info header */}
+      <div style={styles.userHeader}>
+        <button 
+          onClick={() => setShowHistory(true)} 
+          style={styles.historyButton}
+        >
+          History / Progress
+        </button>
+        <span style={styles.userEmail}>{user.email}</span>
+        <button 
+          onClick={() => db.auth.signOut()} 
+          style={styles.signOutButton}
+        >
+          Sign Out
+        </button>
+      </div>
+
+      {/* Render the current step */}
+      {renderCurrentStep()}
+    </div>
+  );
+}
+
+// ==========================================
+// STYLES
+// ==========================================
+
+const styles: Record<string, React.CSSProperties> = {
+  app: {
+    minHeight: '100vh',
+    background: '#ffffff',
+    fontFamily: "'Segoe UI', system-ui, sans-serif",
+    position: 'relative',
+  },
+  loadingContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '100vh',
+  },
+  spinner: {
+    width: '40px',
+    height: '40px',
+    border: '3px solid #e5e5e5',
+    borderTop: '3px solid #111111',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+  },
+  loadingText: {
+    color: '#666666',
+    marginTop: '16px',
+    fontSize: '1rem',
+  },
+  userHeader: {
+    position: 'fixed',
+    top: '16px',
+    right: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    zIndex: 100,
+  },
+  userEmail: {
+    color: '#666666',
+    fontSize: '0.85rem',
+  },
+  signOutButton: {
+    background: '#ffffff',
+    color: '#333333',
+    border: '1px solid #000000',
+    padding: '6px 12px',
+    fontSize: '0.8rem',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  historyButton: {
+    background: '#000000',
+    color: '#ffffff',
+    border: '1px solid #000000',
+    padding: '6px 12px',
+    fontSize: '0.8rem',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+};
+
+export default App;
