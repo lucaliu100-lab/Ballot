@@ -58,18 +58,43 @@ const sessionStorage: Map<string, SessionData> = new Map();
 // MIDDLEWARE SETUP
 // ===========================================
 
-// Enable CORS so frontend can call our API
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.FRONTEND_URL || '', 'https://path-to-the-ballot.pages.dev'] 
-    : true,
+function getAllowedOrigins(): string[] {
+  // Prefer comma-separated list, fallback to single FRONTEND_URL
+  const raw =
+    process.env.FRONTEND_URLS ??
+    process.env.FRONTEND_URL ??
+    '';
+
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (curl, server-to-server) where Origin header is absent
+    if (!origin) return callback(null, true);
+
+    // In local dev we allow any origin to reduce friction
+    if (process.env.NODE_ENV !== 'production') return callback(null, true);
+
+    const allowed = getAllowedOrigins();
+    if (allowed.includes(origin)) return callback(null, true);
+
+    // Reject explicitly (results in missing CORS headers, which is what browsers enforce)
+    return callback(new Error(`CORS blocked origin: ${origin}`));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-}));
+};
 
-// Handle preflight OPTIONS requests
-app.options('*', cors());
+// Enable CORS so frontend can call our API
+app.use(cors(corsOptions));
+
+// Handle preflight OPTIONS requests (must use the same options)
+app.options('*', cors(corsOptions));
 
 // Parse JSON request bodies
 app.use(express.json());
