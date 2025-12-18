@@ -364,8 +364,16 @@ function App() {
       {/* User info header */}
       <div style={styles.userHeader}>
         <button 
-          onClick={() => setShowHistory(true)} 
-          style={styles.historyButton}
+          onClick={() => setShowHistory(true)}
+          disabled={currentStep === 'record' || currentStep === 'processing'}
+          style={{
+            ...styles.historyButton,
+            opacity: (currentStep === 'record' || currentStep === 'processing') ? 0.5 : 1,
+            cursor: (currentStep === 'record' || currentStep === 'processing') ? 'not-allowed' : 'pointer',
+          }}
+          title={(currentStep === 'record' || currentStep === 'processing')
+            ? 'Finish recording/processing before opening History (prevents interrupting uploads)'
+            : 'Open History'}
         >
           History / Progress
         </button>

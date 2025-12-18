@@ -76,6 +76,12 @@ function RecordScreen({
   // Array to store recorded video chunks
   const chunksRef = useRef<Blob[]>([]);
 
+  // Abort controller for an in-flight upload request (prevents late completion changing app state)
+  const uploadAbortRef = useRef<AbortController | null>(null);
+
+  // Track mount state to avoid setting state after unmount
+  const isMountedRef = useRef(true);
+
   // Reference to the countdown timer interval
   const countdownRef = useRef<number | null>(null);
 
@@ -129,7 +135,12 @@ function RecordScreen({
   // Cleanup timers on unmount
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       stopTimers();
+
+      // Cancel any in-flight upload so it can't complete later and jump the app to processing/report
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
     };
   }, [stopTimers]);
 
@@ -279,6 +290,11 @@ function RecordScreen({
     setError(null);
 
     try {
+      // Cancel any previous in-flight upload attempt
+      uploadAbortRef.current?.abort();
+      const controller = new AbortController();
+      uploadAbortRef.current = controller;
+
       // Create FormData to send the file
       const formData = new FormData();
       formData.append('file', recordedBlob, 'recording.webm');
@@ -287,6 +303,7 @@ function RecordScreen({
       const response = await fetch(API_ENDPOINTS.upload, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -296,10 +313,18 @@ function RecordScreen({
       const data: UploadResponse = await response.json();
       
       // Notify parent component of success
-      onUploadComplete(data);
+      if (isMountedRef.current) {
+        onUploadComplete(data);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-      setRecordingState('stopped');
+      // If the request was aborted (e.g., user navigated away), do nothing noisy
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Upload failed');
+        setRecordingState('stopped');
+      }
     }
   };
 

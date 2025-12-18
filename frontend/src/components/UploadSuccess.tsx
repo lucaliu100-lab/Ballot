@@ -52,6 +52,22 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
   const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
+  // Abort controllers so leaving the page can't cause "late" state transitions
+  const abortRef = useState(() => ({
+    transcript: new AbortController(),
+    video: new AbortController(),
+    feedback: new AbortController(),
+  }))[0];
+
+  // Cancel in-flight requests on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.transcript.abort();
+      abortRef.video.abort();
+      abortRef.feedback.abort();
+    };
+  }, [abortRef]);
+
   // ===========================================
   // STEP 1: FETCH TRANSCRIPT ON MOUNT
   // ===========================================
@@ -68,6 +84,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: uploadResponse.sessionId }),
+          signal: abortRef.transcript.signal,
         });
 
         if (!response.ok) {
@@ -81,6 +98,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
         setTranscript(data.transcript);
         
       } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
         console.error('❌ Failed to fetch transcript:', err);
         setAudioError(err instanceof Error ? err.message : 'Failed to process audio');
       } finally {
@@ -109,6 +127,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: uploadResponse.sessionId }),
+          signal: abortRef.video.signal,
         });
 
         if (!response.ok) {
@@ -122,6 +141,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
         setBodyLanguageSummary(data.videoSummary);
         
       } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
         console.error('❌ Failed to fetch video analysis:', err);
         setVideoError(err instanceof Error ? err.message : 'Failed to analyze video');
         // Set a default message so we can still proceed to feedback
@@ -157,6 +177,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
           theme,
           quote,
         }),
+        signal: abortRef.feedback.signal,
       });
 
       if (!response.ok) {
@@ -178,6 +199,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
       );
       
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       console.error('❌ Failed to generate feedback:', err);
       setFeedbackError(err instanceof Error ? err.message : 'Failed to generate feedback');
       setIsGeneratingFeedback(false);

@@ -326,7 +326,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<Transcript
 
   console.log('\n🎤 Starting speech transcription...');
   console.log('   Audio file:', audioFilePath);
-  console.log('   API Key:', `${apiKey.substring(0, 8)}...${apiKey.substring(apiKey.length - 4)}`);
+  // Never log API keys (even partially) in server logs
 
   const audioBase64 = audioFileToBase64(audioFilePath);
   const audioFormat = getAudioFormat(audioFilePath);
@@ -336,9 +336,11 @@ export async function transcribeAudio(audioFilePath: string): Promise<Transcript
 
   // Try methods in order of preference
   const methods = [
-    () => tryParaformerRealtime(audioFilePath, apiKey),
-    () => trySenseVoice(audioBase64, audioFormat, apiKey),
     () => tryQwenAudioMultimodal(audioBase64, audioFormat, apiKey),
+    // These endpoints frequently fail for accounts that don't have HTTP access enabled.
+    // Keep them as fallbacks (after multimodal) to avoid slow 400s dominating the happy path.
+    () => trySenseVoice(audioBase64, audioFormat, apiKey),
+    () => tryParaformerRealtime(audioFilePath, apiKey),
   ];
 
   for (const method of methods) {
@@ -365,7 +367,6 @@ export async function transcribeAudio(audioFilePath: string): Promise<Transcript
 
 export function isQwenAudioConfigured(): boolean {
   const apiKey = getApiKey();
-  console.log('🔑 API Key configured:', Boolean(apiKey));
   return Boolean(apiKey);
 }
 
