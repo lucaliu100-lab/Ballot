@@ -82,6 +82,19 @@ const corsOptions: cors.CorsOptions = {
     const allowed = getAllowedOrigins();
     if (allowed.includes(origin)) return callback(null, true);
 
+    /**
+     * Cloudflare Pages preview deployments use subdomains like:
+     *   https://<preview>.<project>.pages.dev
+     *
+     * If you only allow the production URL, previews will fail with CORS.
+     * Default to allowing any subdomain of this project on pages.dev.
+     */
+    const pagesProject = process.env.CLOUDFLARE_PAGES_PROJECT || 'ballotv1';
+    const pagesSuffix = `.${pagesProject}.pages.dev`;
+    if (origin === `https://${pagesProject}.pages.dev` || origin.endsWith(pagesSuffix)) {
+      return callback(null, true);
+    }
+
     // Reject explicitly (results in missing CORS headers, which is what browsers enforce)
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
