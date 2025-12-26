@@ -14,7 +14,7 @@
  * User sessions are persisted to InstantDB for history tracking.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 // Import InstantDB
 import { db } from './lib/instant';
@@ -60,7 +60,7 @@ function App() {
   // Response from the upload API
   const [uploadResponse, setUploadResponse] = useState<UploadResponse | null>(null);
 
-  // Feedback from DeepSeek
+  // Feedback from Gemini 2.0 Flash
   const [feedback, setFeedback] = useState<DebateFeedback | null>(null);
   const [isFeedbackMock, setIsFeedbackMock] = useState(false);
 
@@ -81,6 +81,11 @@ function App() {
   // ==========================================
   // FLOW HANDLERS
   // ==========================================
+
+  // Dev-only: log step transitions to make debugging flow issues easier
+  useEffect(() => {
+    console.log(`🧭 Flow step: ${currentStep}`);
+  }, [currentStep]);
 
   /**
    * Called when the round data is loaded from the API
@@ -144,6 +149,7 @@ function App() {
    * Move to processing step
    */
   const handleUploadComplete = (response: UploadResponse) => {
+    console.log('📦 Upload complete (frontend):', response);
     setUploadResponse(response);
     setCurrentStep('processing');
   };

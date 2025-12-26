@@ -5,9 +5,7 @@
  * - /api/ping - Health check endpoint
  * - /api/start-round - Returns theme and quotes for practice
  * - /api/upload - Accepts video recordings from users
- * - /api/process-audio - Transcribes uploaded recordings using Qwen2-Audio
- * - /api/analyze-video - Analyzes body language using Qwen2.5-VL
- * - /api/generate-feedback - Generates debate judge feedback using DeepSeek
+ * - /api/process-all - Perform multimodal analysis (Audio/Video/Feedback) in one pass using Gemini
  */
 
 import express from 'express';
@@ -18,16 +16,8 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 
-// Import our custom modules for audio processing
-import { transcribeAudio, isQwenAudioConfigured, getQwenAudioStatus } from './qwenAudioClient';
-import { extractAudioFromVideo, cleanupTempAudio, checkFfmpegAvailable } from './audioExtractor';
-
-// Import our custom modules for video analysis
-import { analyzeBodyLanguageFromFrames, isQwenVLConfigured, getQwenVLStatus } from './qwenVideoClient';
-import { extractFramesFromVideo } from './frameExtractor';
-
-// Import DeepSeek client for feedback generation
-import { generateDebateFeedback, isDeepSeekConfigured, getDeepSeekStatus } from './deepseekClient';
+// Import our custom modules for Gemini multimodal analysis
+import { analyzeSpeechWithGemini, isGeminiConfigured, getGeminiStatus } from './geminiClient';
 
 // Load environment variables
 // Try backend/.env first, then root .env for local development
@@ -160,16 +150,10 @@ app.get('/api/ping', (req, res) => {
  * Check if all services are configured properly
  */
 app.get('/api/status', async (req, res) => {
-  const qwenAudioStatus = getQwenAudioStatus();
-  const qwenVLStatus = getQwenVLStatus();
-  const deepseekStatus = getDeepSeekStatus();
-  const ffmpegAvailable = await checkFfmpegAvailable();
+  const geminiStatus = getGeminiStatus();
   
   res.json({
-    qwenAudio: qwenAudioStatus,
-    qwenVL: qwenVLStatus,
-    deepseek: deepseekStatus,
-    ffmpeg: ffmpegAvailable,
+    gemini: geminiStatus,
     sessionsStored: sessionStorage.size,
   });
 });
@@ -331,189 +315,104 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 });
 
 /**
- * POST /api/process-audio
- * Transcribe a previously uploaded video recording
- * 
- * Expected JSON body: { sessionId: string }
- * Returns: { transcript: string } or { error: string }
+ * Multer / upload error handler
+ * Ensures the frontend gets a clear JSON error instead of a generic HTML/stack trace.
  */
-app.post('/api/process-audio', async (req, res) => {
-  const { sessionId } = req.body;
-
-  // Validate input
-  if (!sessionId) {
-    return res.status(400).json({ 
-      error: 'Missing sessionId in request body' 
-    });
-  }
-
-  console.log('');
-  console.log('🔄 Processing audio for session:', sessionId);
-
-  // Look up the session data
-  const sessionData = sessionStorage.get(sessionId);
-  if (!sessionData) {
-    console.error('❌ Session not found:', sessionId);
-    return res.status(404).json({ 
-      error: 'Session not found. The video may have been deleted or the session expired.' 
-    });
-  }
-
-  const { filePath: videoPath } = sessionData;
-
-  // Check if video file still exists
-  if (!fs.existsSync(videoPath)) {
-    console.error('❌ Video file not found:', videoPath);
-    sessionStorage.delete(sessionId);
-    return res.status(404).json({ 
-      error: 'Video file not found. It may have been deleted.' 
-    });
-  }
-
-  // Check if Qwen API is configured
-  if (!isQwenAudioConfigured()) {
-    console.warn('⚠️ Qwen Audio API not configured - returning mock transcript');
-    return res.json({
-      transcript: '[Mock Transcript] The Qwen Audio API is not configured yet. ' +
-        'To enable real transcription, please add QWEN_AUDIO_API_KEY to your .env file.',
-      isMock: true,
-    });
-  }
-
-  try {
-    // Step 1: Extract audio from video using FFmpeg
-    console.log('Step 1/2: Extracting audio from video...');
-    const extractionResult = await extractAudioFromVideo(videoPath, sessionId);
-    
-    if (!extractionResult.success || !extractionResult.audioPath) {
-      return res.status(500).json({ 
-        error: extractionResult.error || 'Failed to extract audio from video' 
-      });
+app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Handle Multer errors (e.g. file too large)
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'Uploaded file is too large (limit is 100MB).' });
     }
-
-    const audioPath = extractionResult.audioPath;
-
-    // Step 2: Transcribe audio
-    console.log('Step 2/2: Transcribing audio...');
-    const transcriptionResult = await transcribeAudio(audioPath);
-
-    // Clean up temporary audio file
-    cleanupTempAudio(audioPath);
-
-    if (!transcriptionResult.success) {
-      return res.status(500).json({ 
-        error: transcriptionResult.error || 'Failed to transcribe audio' 
-      });
-    }
-
-    console.log('✅ Audio processing complete!');
-
-    res.json({
-      transcript: transcriptionResult.transcript,
-      isMock: false,
-    });
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('❌ Processing failed:', errorMessage);
-    res.status(500).json({ 
-      error: `Processing failed: ${errorMessage}` 
-    });
+    return res.status(400).json({ error: `Upload error: ${err.message}` });
   }
+
+  // Handle unknown errors
+  if (err instanceof Error) {
+    return res.status(500).json({ error: `Server error: ${err.message}` });
+  }
+
+  return next();
 });
 
 /**
- * POST /api/analyze-video
- * Analyze body language from a previously uploaded video
+ * POST /api/process-all
+ * Perform multimodal analysis (Audio/Video/Feedback) in one pass using Gemini
  * 
  * Expected JSON body: { sessionId: string }
- * Returns: { sessionId: string, videoSummary: string } or { error: string }
+ * Returns: { transcript, videoSummary, feedback, speechStats }
  */
-app.post('/api/analyze-video', async (req, res) => {
+app.post('/api/process-all', async (req, res) => {
   const { sessionId } = req.body;
 
-  // Validate input
   if (!sessionId) {
-    return res.status(400).json({ 
-      error: 'Missing sessionId in request body' 
-    });
+    return res.status(400).json({ error: 'Missing sessionId' });
   }
 
-  console.log('');
-  console.log('🎬 Analyzing video for session:', sessionId);
+  console.log('\n🌟 Processing multimodal analysis for session:', sessionId);
 
-  // Look up the session data
   const sessionData = sessionStorage.get(sessionId);
   if (!sessionData) {
-    console.error('❌ Session not found:', sessionId);
-    return res.status(404).json({ 
-      error: 'Session not found. The video may have been deleted or the session expired.' 
-    });
+    return res.status(404).json({ error: 'Session not found' });
   }
 
-  const { filePath: videoPath } = sessionData;
+  const { filePath: videoPath, theme, quote } = sessionData;
 
-  // Check if video file still exists
   if (!fs.existsSync(videoPath)) {
-    console.error('❌ Video file not found:', videoPath);
     sessionStorage.delete(sessionId);
-    return res.status(404).json({ 
-      error: 'Video file not found. It may have been deleted.' 
-    });
+    return res.status(404).json({ error: 'Video file not found' });
   }
 
-  // Check if Qwen VL API is configured
-  if (!isQwenVLConfigured()) {
-    console.warn('⚠️ Qwen VL API not configured - returning mock analysis');
+  if (!isGeminiConfigured()) {
+    console.warn('⚠️ Gemini API not configured - returning mock data');
     return res.json({
       sessionId,
-      videoSummary: '[Mock Analysis] The Qwen VL API is not configured yet. ' +
-        'To enable real body language analysis, please add QWEN_VL_API_KEY to your .env file. ' +
-        'The speaker appears engaged and maintains reasonable posture throughout the recording.',
+      transcript: "[Mock Transcript] Gemini API is not configured. Please add OPENROUTER_API_KEY to your .env file.",
+      videoSummary: "[Mock Analysis] The speaker appears engaged in the video.",
+      feedback: {
+        contentSummary: "[Mock] A summary of the speech.",
+        scores: { structure: 7, content: 6, delivery: 7 },
+        strengths: ["[Mock] Good energy"],
+        improvements: ["[Mock] More eye contact"],
+        practiceDrill: "[Mock] Practice with a timer."
+      },
+      speechStats: { wordCount: 0, wordsPerMinute: 0, fillerCount: 0 },
       isMock: true,
     });
   }
 
   try {
-    // Step 1: Extract frames from video using FFmpeg
-    console.log('Step 1/2: Extracting frames from video...');
-    const frameResult = await extractFramesFromVideo(videoPath, sessionId);
-    
-    if (!frameResult.success || !frameResult.frames) {
-      return res.status(500).json({ 
-        error: frameResult.error || 'Failed to extract frames from video' 
-      });
+    const result = await analyzeSpeechWithGemini({
+      videoPath,
+      theme: theme || 'General Practice',
+      quote: quote || 'No specific quote',
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error || 'Gemini analysis failed' });
     }
 
-    console.log(`   Extracted ${frameResult.frameCount} frames`);
+    // Calculate speech stats from the transcript Gemini provided
+    const speechStats = calculateSpeechStats(result.transcript);
 
-    // Step 2: Analyze frames with Qwen2.5-VL
-    console.log('Step 2/2: Analyzing body language with Qwen2.5-VL...');
-    const analysisResult = await analyzeBodyLanguageFromFrames(frameResult.frames);
-
-    if (!analysisResult.success) {
-      return res.status(500).json({ 
-        error: analysisResult.error || 'Failed to analyze video' 
-      });
-    }
-
-    console.log('✅ Video analysis complete!');
-
-    // Return the analysis
     res.json({
       sessionId,
-      videoSummary: analysisResult.summary,
+      transcript: result.transcript,
+      videoSummary: result.bodyLanguageAnalysis,
+      feedback: result.feedback,
+      speechStats,
       isMock: false,
     });
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('❌ Video analysis failed:', errorMessage);
-    res.status(500).json({ 
-      error: `Video analysis failed: ${errorMessage}` 
-    });
+    console.error('❌ Multimodal analysis failed:', errorMessage);
+    res.status(500).json({ error: `Analysis failed: ${errorMessage}` });
   }
 });
+
+// Remove old endpoints
+// /api/process-audio, /api/analyze-video, /api/generate-feedback have been removed
 
 /**
  * Helper function to calculate speech statistics from transcript
@@ -553,108 +452,6 @@ function calculateSpeechStats(transcript: string, durationSeconds?: number): {
   return { wordCount, wordsPerMinute, fillerCount };
 }
 
-/**
- * POST /api/generate-feedback
- * Generate comprehensive debate judge feedback using DeepSeek
- * 
- * Expected JSON body: {
- *   sessionId: string,
- *   transcript: string,
- *   bodyLanguageAnalysis: string,
- *   theme: string,
- *   quote: string,
- *   durationSeconds?: number
- * }
- * 
- * Returns: { feedback: {...} } or { error: string }
- */
-app.post('/api/generate-feedback', async (req, res) => {
-  const { sessionId, transcript, bodyLanguageAnalysis, theme, quote, durationSeconds } = req.body;
-
-  // Validate required fields
-  if (!sessionId) {
-    return res.status(400).json({ error: 'Missing sessionId' });
-  }
-  if (!transcript) {
-    return res.status(400).json({ error: 'Missing transcript' });
-  }
-  if (!bodyLanguageAnalysis) {
-    return res.status(400).json({ error: 'Missing bodyLanguageAnalysis' });
-  }
-
-  console.log('');
-  console.log('🎯 Generating debate feedback for session:', sessionId);
-
-  // Calculate speech statistics from transcript
-  const speechStats = calculateSpeechStats(transcript, durationSeconds);
-  console.log('   Speech stats:', speechStats);
-
-  // Check if DeepSeek API is configured
-  if (!isDeepSeekConfigured()) {
-    console.warn('⚠️ DeepSeek API not configured - returning mock feedback');
-    return res.json({
-      sessionId,
-      feedback: {
-        contentSummary: '[Mock] The speaker discussed their interpretation of the quote, connecting it to personal experiences and broader themes.',
-        scores: {
-          structure: 7,
-          content: 6,
-          delivery: 7,
-        },
-        strengths: [
-          '[Mock] Clear opening that connected to the quote.',
-          '[Mock] Good use of a personal example to illustrate your point.',
-          '[Mock] Maintained eye contact with the camera throughout.',
-        ],
-        improvements: [
-          '[Mock] Your thesis was unclear - state your main argument in the first 30 seconds.',
-          '[Mock] The conclusion felt rushed - summarize your key points before ending.',
-          '[Mock] Reduce filler words like "um" and "like" which appeared frequently.',
-        ],
-        practiceDrill: '[Mock] Configure DEEPSEEK_API_KEY for real feedback. Practice: Record a 2-minute speech where you pause for 1 full second between sentences.',
-      },
-      speechStats,
-      isMock: true,
-    });
-  }
-
-  try {
-    // Generate feedback using DeepSeek
-    const result = await generateDebateFeedback({
-      transcript,
-      bodyLanguageAnalysis,
-      theme: theme || 'General Speech Practice',
-      quote: quote || 'No specific quote provided',
-      durationSeconds: durationSeconds || speechStats.wordCount > 0 ? Math.round((speechStats.wordCount / 130) * 60) : undefined,
-      wordCount: speechStats.wordCount,
-      wordsPerMinute: speechStats.wordsPerMinute,
-      fillerCount: speechStats.fillerCount,
-    });
-
-    if (!result.success) {
-      return res.status(500).json({
-        error: result.error || 'Failed to generate feedback',
-      });
-    }
-
-    console.log('✅ Feedback generation complete!');
-
-    res.json({
-      sessionId,
-      feedback: result.feedback,
-      speechStats,
-      isMock: false,
-    });
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('❌ Feedback generation failed:', errorMessage);
-    res.status(500).json({
-      error: `Feedback generation failed: ${errorMessage}`,
-    });
-  }
-});
-
 // ===========================================
 // START SERVER
 // ===========================================
@@ -664,33 +461,10 @@ app.listen(PORT, async () => {
   console.log('🚀 Backend running at http://localhost:' + PORT);
   console.log('');
   
-  // Check FFmpeg availability
-  const ffmpegOk = await checkFfmpegAvailable();
-  if (!ffmpegOk) {
-    console.log('⚠️  WARNING: FFmpeg is not installed!');
-    console.log('   Audio/video processing will not work without FFmpeg.');
-    console.log('   Install it with: brew install ffmpeg (macOS)');
-    console.log('');
-  }
-  
-  // Check Qwen Audio API configuration
-  if (!isQwenAudioConfigured()) {
-    console.log('⚠️  WARNING: QWEN_AUDIO_API_KEY is not set!');
-    console.log('   Transcription will return mock data.');
-    console.log('');
-  }
-
-  // Check Qwen VL API configuration
-  if (!isQwenVLConfigured()) {
-    console.log('⚠️  WARNING: QWEN_VL_API_KEY is not set!');
-    console.log('   Body language analysis will return mock data.');
-    console.log('');
-  }
-
-  // Check DeepSeek API configuration
-  if (!isDeepSeekConfigured()) {
-    console.log('⚠️  WARNING: DEEPSEEK_API_KEY is not set!');
-    console.log('   Debate feedback will return mock data.');
+  // Check Gemini API configuration
+  if (!isGeminiConfigured()) {
+    console.log('⚠️  WARNING: OPENROUTER_API_KEY is not set!');
+    console.log('   Analysis will return mock data.');
     console.log('');
   }
   
@@ -699,8 +473,6 @@ app.listen(PORT, async () => {
   console.log('  GET  /api/status           - Check service configuration');
   console.log('  POST /api/start-round      - Get theme & quotes');
   console.log('  POST /api/upload           - Upload video recording');
-  console.log('  POST /api/process-audio    - Transcribe recording');
-  console.log('  POST /api/analyze-video    - Analyze body language');
-  console.log('  POST /api/generate-feedback - Generate debate feedback');
+  console.log('  POST /api/process-all      - Multimodal analysis (Gemini)');
   console.log('');
 });

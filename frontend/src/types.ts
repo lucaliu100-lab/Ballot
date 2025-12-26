@@ -31,7 +31,7 @@ export interface VideoAnalysisResponse {
   isMock?: boolean;
 }
 
-// Structured feedback from DeepSeek
+// Structured feedback from Gemini
 export interface DebateFeedback {
   scores: {
     structure: number;    // 1-10 score for organization

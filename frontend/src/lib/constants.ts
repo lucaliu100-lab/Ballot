@@ -103,8 +103,6 @@ export const API_ENDPOINTS = {
   status: `${API_BASE_URL}/status`,
   startRound: `${API_BASE_URL}/start-round`,
   upload: `${API_BASE_URL}/upload`,
-  processAudio: `${API_BASE_URL}/process-audio`,
-  analyzeVideo: `${API_BASE_URL}/analyze-video`,
-  generateFeedback: `${API_BASE_URL}/generate-feedback`,
+  processAll: `${API_BASE_URL}/process-all`,
 } as const;
 

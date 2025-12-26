@@ -1,7 +1,7 @@
 /**
  * FeedbackReport Component
  * 
- * Displays the comprehensive debate judge feedback from DeepSeek.
+ * Displays the comprehensive debate judge feedback from Gemini.
  * Shows:
  * - Overall score with visual indicator
  * - Content and delivery analysis

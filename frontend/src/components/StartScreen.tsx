@@ -25,27 +25,53 @@ function StartScreen({ onRoundStart }: StartScreenProps) {
     setError(null);
 
     try {
+      console.log('🎬 Start Round: requesting /api/start-round...');
+
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
+
       // Call our backend API to get theme and quotes
       const response = await fetch(API_ENDPOINTS.startRound, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
       });
+
+      window.clearTimeout(timeoutId);
 
       // Check if request was successful
       if (!response.ok) {
-        throw new Error('Failed to start round');
+        const contentType = response.headers.get('content-type') || '';
+        let details = '';
+        try {
+          if (contentType.includes('application/json')) {
+            const json = await response.json();
+            details = json?.error ? String(json.error) : JSON.stringify(json);
+          } else {
+            details = await response.text();
+          }
+        } catch {
+          // ignore
+        }
+        const suffix = details ? `: ${details}` : '';
+        throw new Error(`Failed to start round (${response.status})${suffix}`);
       }
 
       // Parse the JSON response
       const data: RoundData = await response.json();
+      console.log('✅ Start Round: received theme/quotes', data);
       
       // Pass the data to parent component
       onRoundStart(data);
     } catch (err) {
       // Handle any errors
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError('Start round timed out. Please try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
     } finally {
       setLoading(false);
     }

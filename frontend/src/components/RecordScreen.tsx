@@ -147,6 +147,9 @@ function RecordScreen({
 
   // Cleanup timers on unmount
   useEffect(() => {
+    // React 18 StrictMode runs effects (setup/cleanup) twice in dev.
+    // Ensure we always mark ourselves mounted when the effect runs.
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       stopTimers();
@@ -317,14 +320,40 @@ function RecordScreen({
       });
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const contentType = response.headers.get('content-type') || '';
+        let details = '';
+        try {
+          if (contentType.includes('application/json')) {
+            const json = await response.json();
+            details = json?.error ? String(json.error) : JSON.stringify(json);
+          } else {
+            details = await response.text();
+          }
+        } catch {
+          // ignore parsing failures; fallback to generic below
+        }
+
+        const suffix = details ? `: ${details}` : '';
+        throw new Error(`Upload failed (${response.status})${suffix}`);
       }
 
       const data: UploadResponse = await response.json();
+      console.log('✅ Upload succeeded:', data);
       
       // Notify parent component of success
       if (isMountedRef.current) {
-        onUploadComplete(data);
+        // Defensive: if the parent transition fails for any reason,
+        // don't leave this screen stuck in the "uploading" state.
+        setRecordingState('stopped');
+        console.log('➡️ Transitioning to processing screen...');
+        try {
+          onUploadComplete(data);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          console.error('❌ onUploadComplete threw:', message);
+          setError(`Failed to advance after upload: ${message}`);
+          setRecordingState('stopped');
+        }
       }
     } catch (err) {
       // If the request was aborted (e.g., user navigated away), do nothing noisy
