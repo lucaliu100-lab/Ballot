@@ -721,14 +721,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   contentGrid: {
     display: 'flex',
-    gap: '64px',
+    gap: '40px',
     alignItems: 'flex-start',
   },
   leftCol: {
     flex: 1.6,
     display: 'flex',
     flexDirection: 'column',
-    gap: '64px',
+    gap: '32px',
   },
   analysisSection: {
     display: 'flex',
@@ -741,17 +741,17 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #f0f0f0',
     borderRadius: '16px',
     padding: '24px',
-    marginBottom: '24px',
+    marginBottom: '16px',
   },
   sectionHeader: {
     fontSize: '1.15rem',
     fontWeight: 800,
-    marginBottom: '24px',
+    marginBottom: '16px',
     display: 'flex',
     alignItems: 'center',
   },
   analysisItem: {
-    marginBottom: '24px',
+    marginBottom: '16px',
   },
   analysisHeader: {
     display: 'flex',

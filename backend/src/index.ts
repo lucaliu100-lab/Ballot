@@ -45,6 +45,7 @@ interface SessionData {
   uploadedAt: Date;
   theme?: string;
   quote?: string;
+  durationSecondsHint?: number;
 }
 
 const sessionStorage: Map<string, SessionData> = new Map();
@@ -298,17 +299,29 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   const filePath = req.file.path;
 
   // Store the session data for later retrieval (including theme/quote if provided)
+  const durationSecondsHintRaw = req.body?.durationSeconds;
+  const durationSecondsHintParsed =
+    typeof durationSecondsHintRaw === 'string' || typeof durationSecondsHintRaw === 'number'
+      ? Number(durationSecondsHintRaw)
+      : undefined;
+  const durationSecondsHint =
+    typeof durationSecondsHintParsed === 'number' && Number.isFinite(durationSecondsHintParsed) && durationSecondsHintParsed > 0
+      ? Math.round(durationSecondsHintParsed)
+      : undefined;
+
   sessionStorage.set(sessionId, {
     filePath,
     uploadedAt: new Date(),
     theme: req.body.theme,
     quote: req.body.quote,
+    durationSecondsHint,
   });
 
   console.log('📹 Video uploaded successfully!');
   console.log('   Session ID:', sessionId);
   console.log('   File path:', filePath);
   console.log('   File size:', (req.file.size / 1024 / 1024).toFixed(2), 'MB');
+  if (durationSecondsHint) console.log('   Client duration hint:', durationSecondsHint, 'sec');
   console.log('   Active sessions:', sessionStorage.size);
 
   // Return success response
@@ -467,6 +480,7 @@ app.post('/api/process-all', async (req, res) => {
       videoPath,
       theme: theme || 'General Practice',
       quote: quote || 'No specific quote',
+      durationSecondsHint: sessionData.durationSecondsHint,
     });
 
     if (!result.success) {

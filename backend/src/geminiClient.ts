@@ -33,6 +33,11 @@ export interface GeminiAnalysisInput {
   videoPath: string;
   theme: string;
   quote: string;
+  /**
+   * Optional duration hint (seconds) supplied by the client at upload time.
+   * Used only as a fallback when ffprobe cannot determine duration from the container metadata.
+   */
+  durationSecondsHint?: number;
 }
 
 export interface GeminiAnalysisResult {
@@ -133,6 +138,82 @@ async function getVideoDurationSeconds(filePath: string): Promise<number> {
       if (typeof duration === 'number' && Number.isFinite(duration) && duration > 0) {
         return resolve(duration);
       }
+      return reject(new Error('Unable to determine video duration.'));
+    });
+  });
+}
+
+function parseDurationStringToSeconds(raw: string): number | null {
+  const s = raw.trim();
+  if (!s) return null;
+
+  // If it's a plain number string.
+  const asNum = Number(s);
+  if (Number.isFinite(asNum) && asNum > 0) return asNum;
+
+  // Common ffprobe tag formats:
+  // - "00:01:23.45"
+  // - "0:01:23.45"
+  // - "01:23.45"
+  // - "00:01:23"
+  const parts = s.split(':').map((p) => p.trim());
+  if (parts.length === 2 || parts.length === 3) {
+    const nums = parts.map((p) => Number(p));
+    if (nums.some((n) => !Number.isFinite(n) || n < 0)) return null;
+
+    let hours = 0;
+    let minutes = 0;
+    let seconds = 0;
+    if (nums.length === 3) {
+      [hours, minutes, seconds] = nums;
+    } else {
+      [minutes, seconds] = nums;
+    }
+    const total = hours * 3600 + minutes * 60 + seconds;
+    return Number.isFinite(total) && total > 0 ? total : null;
+  }
+
+  return null;
+}
+
+async function getVideoDurationSecondsRobust(filePath: string): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) return reject(err);
+
+      // 1) Best-case: format.duration (number).
+      const fmtDur = metadata?.format?.duration;
+      if (typeof fmtDur === 'number' && Number.isFinite(fmtDur) && fmtDur > 0) {
+        return resolve(fmtDur);
+      }
+
+      // 2) Streams may contain duration as number or string.
+      const streams: any[] = Array.isArray((metadata as any)?.streams) ? (metadata as any).streams : [];
+      for (const st of streams) {
+        const stDur = st?.duration;
+        if (typeof stDur === 'number' && Number.isFinite(stDur) && stDur > 0) return resolve(stDur);
+        if (typeof stDur === 'string') {
+          const parsed = parseDurationStringToSeconds(stDur);
+          if (parsed && parsed > 0) return resolve(parsed);
+        }
+        const tagDur =
+          (typeof st?.tags?.DURATION === 'string' && st.tags.DURATION) ||
+          (typeof st?.tags?.duration === 'string' && st.tags.duration);
+        if (typeof tagDur === 'string') {
+          const parsed = parseDurationStringToSeconds(tagDur);
+          if (parsed && parsed > 0) return resolve(parsed);
+        }
+      }
+
+      // 3) Container tags sometimes store DURATION
+      const fmtTagDur =
+        (typeof (metadata as any)?.format?.tags?.DURATION === 'string' && (metadata as any).format.tags.DURATION) ||
+        (typeof (metadata as any)?.format?.tags?.duration === 'string' && (metadata as any).format.tags.duration);
+      if (typeof fmtTagDur === 'string') {
+        const parsed = parseDurationStringToSeconds(fmtTagDur);
+        if (parsed && parsed > 0) return resolve(parsed);
+      }
+
       return reject(new Error('Unable to determine video duration.'));
     });
   });
@@ -292,6 +373,238 @@ function ensureMinPriorityImprovements(analysis: any, minCount: number): void {
   analysis.priorityImprovements = [...existing, ...toAdd].slice(0, minCount);
 }
 
+function normalizePriorityImprovements(
+  analysis: any,
+  context: {
+    durationSeconds: number;
+    wpm: number;
+    fillerTotal: number;
+    fillerPerMinute: number;
+    eyeContactPercentage?: number;
+  }
+): void {
+  if (!analysis || typeof analysis !== 'object') return;
+
+  const safeNumber = (v: any, fallback = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const durationSeconds = safeNumber(context.durationSeconds, 0);
+  const isTooShort = durationSeconds > 0 && durationSeconds < 240; // < 4:00 gets "length below optimal"; <3:00 is especially critical.
+
+  const fillerTotal = safeNumber(context.fillerTotal, 0);
+  const fillerPerMinute = safeNumber(context.fillerPerMinute, 0);
+  const wpm = safeNumber(context.wpm, 0);
+  const eyeContactPct =
+    typeof context.eyeContactPercentage === 'number' && Number.isFinite(context.eyeContactPercentage)
+      ? context.eyeContactPercentage
+      : undefined;
+
+  const existingRaw: any[] = Array.isArray(analysis.priorityImprovements) ? analysis.priorityImprovements : [];
+
+  const normalizeItem = (x: any) => {
+    if (!x || typeof x !== 'object') return null;
+    const issue = typeof x.issue === 'string' ? x.issue.trim() : '';
+    const action = typeof x.action === 'string' ? x.action.trim() : '';
+    const impact = typeof x.impact === 'string' ? x.impact.trim() : '';
+    if (!issue || !action || !impact) return null;
+    return { issue, action, impact };
+  };
+
+  const looksLikeFiller = (text: string) => /\b(filler|fillers|um|uh|like|you know|basically|actually|literally)\b/i.test(text);
+  const looksLikeEyeContact = (text: string) => /\b(eye contact|look(ing)? up|gaze|staring at notes|audience contact)\b/i.test(text);
+  const looksLikePacing = (text: string) => /\b(pace|pacing|too fast|too slow|speed|wpm|words per minute)\b/i.test(text);
+  const looksLikeLength = (text: string) => /\b(length|too short|insufficient length|time limit|time management|minutes?)\b/i.test(text);
+
+  // Prefer not to recommend fillers/eye contact/pacing when stats show those are already fine.
+  const shouldSuppressFiller = fillerTotal === 0 || fillerPerMinute < 3;
+  const shouldSuppressEyeContact = typeof eyeContactPct === 'number' && eyeContactPct >= 75;
+  const shouldSuppressPacing = wpm >= 130 && wpm <= 170; // generous "fine" band; we want top-3 to target true gaps.
+
+  const filteredExisting = existingRaw
+    .map(normalizeItem)
+    .filter(Boolean)
+    .filter((x: any) => {
+      const text = `${x.issue} ${x.action} ${x.impact}`;
+      if (shouldSuppressFiller && looksLikeFiller(text)) return false;
+      if (shouldSuppressEyeContact && looksLikeEyeContact(text)) return false;
+      if (shouldSuppressPacing && looksLikePacing(text)) return false;
+      return true;
+    }) as Array<{ issue: string; action: string; impact: string }>;
+
+  const items: Array<{ issue: string; action: string; impact: string }> = [];
+
+  // Rule: If length is below optimal/insufficient, it must be priority #1.
+  if (isTooShort) {
+    const durationLabel = durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'unknown';
+    items.push({
+      issue: 'Insufficient competitive length',
+      action:
+        durationSeconds < 180
+          ? `Re-record to ≥3:00 (optimal 4:00–6:00). Your speech length (${durationLabel}) is too short to demonstrate competitive depth.`
+          : `Extend to 4:00–6:00 and allocate time across 2–3 body points (intro ~0:20–0:30, conclusion ~0:20–0:30). Current length: ${durationLabel}.`,
+      impact: 'Enables depth, multiple developed points, and judgeable structure under NSDA expectations.',
+    });
+  }
+
+  // Keep remaining valid model-provided items (avoid duplicates / avoid pushing length twice).
+  for (const x of filteredExisting) {
+    if (items.length >= 3) break;
+    if (isTooShort && looksLikeLength(`${x.issue} ${x.action} ${x.impact}`)) continue;
+    if (items.some((y) => y.issue.toLowerCase() === x.issue.toLowerCase())) continue;
+    items.push(x);
+  }
+
+  // If we still need more, choose based on lowest sub-scores (largest gaps).
+  const scoreMap: Array<{ key: string; score: number }> = [];
+  const pushScore = (key: string, score: any) => scoreMap.push({ key, score: safeNumber(score, 10) });
+
+  try {
+    pushScore('content.argumentStructure', analysis.contentAnalysis?.argumentStructure?.score);
+    pushScore('content.depthOfAnalysis', analysis.contentAnalysis?.depthOfAnalysis?.score);
+    pushScore('content.examplesEvidence', analysis.contentAnalysis?.examplesEvidence?.score);
+    pushScore('content.topicAdherence', analysis.contentAnalysis?.topicAdherence?.score);
+    pushScore('content.timeManagement', analysis.contentAnalysis?.timeManagement?.score);
+
+    pushScore('delivery.vocalVariety', analysis.deliveryAnalysis?.vocalVariety?.score);
+    pushScore('delivery.pacing', analysis.deliveryAnalysis?.pacing?.score);
+    pushScore('delivery.articulation', analysis.deliveryAnalysis?.articulation?.score);
+    pushScore('delivery.fillerWords', analysis.deliveryAnalysis?.fillerWords?.score);
+
+    pushScore('language.vocabulary', analysis.languageAnalysis?.vocabulary?.score);
+    pushScore('language.rhetoricalDevices', analysis.languageAnalysis?.rhetoricalDevices?.score);
+    pushScore('language.emotionalAppeal', analysis.languageAnalysis?.emotionalAppeal?.score);
+    pushScore('language.logicalAppeal', analysis.languageAnalysis?.logicalAppeal?.score);
+
+    pushScore('body.eyeContact', analysis.bodyLanguageAnalysis?.eyeContact?.score);
+    pushScore('body.gestures', analysis.bodyLanguageAnalysis?.gestures?.score);
+    pushScore('body.posture', analysis.bodyLanguageAnalysis?.posture?.score);
+    pushScore('body.stagePresence', analysis.bodyLanguageAnalysis?.stagePresence?.score);
+  } catch {
+    // ignore
+  }
+
+  const templates: Record<string, { issue: string; action: string; impact: string }> = {
+    'content.argumentStructure': {
+      issue: 'Weak argument structure (roadmap + signposting)',
+      action: 'Use a 10-second roadmap in the intro (“I’ll prove this in 3 ways…”) and label each body point with explicit transitions.',
+      impact: 'Improves judge flow immediately and makes your reasoning feel intentional and tournament-ready.',
+    },
+    'content.depthOfAnalysis': {
+      issue: 'Surface-level analysis (needs warrants)',
+      action: 'For each claim, add 2 “because” warrants and one counter-consideration (“Some might say…, but…”).',
+      impact: 'Raises sophistication from local-level assertions to quarters+ analytical depth.',
+    },
+    'content.examplesEvidence': {
+      issue: 'Examples are not specific enough',
+      action: 'Add 1 concrete example per point (name/place/event) and explain explicitly how it proves the claim in one sentence.',
+      impact: 'Boosts credibility and makes arguments harder to dismiss on ballots.',
+    },
+    'content.topicAdherence': {
+      issue: 'Thesis drift / weak quote linkage',
+      action: 'End each body point with a 1-sentence link-back: “This proves the quote because…”.',
+      impact: 'Prevents tangents and keeps the judge convinced you answered the prompt.',
+    },
+    'content.timeManagement': {
+      issue: 'Time allocation is unbalanced',
+      action: 'Target: intro 0:20–0:30, each body point ~1:15–1:45, conclusion 0:20–0:30. Practice with a timer and planned transitions.',
+      impact: 'Stops rushing and allows full development of your best arguments.',
+    },
+    'delivery.vocalVariety': {
+      issue: 'Vocal variety is too flat (energy + emphasis)',
+      action: 'Mark 3 emphasis words per point and deliberately vary volume/pitch on them; add 1 purposeful pause before each transition.',
+      impact: 'Improves engagement and makes key lines land like “finals” speakers.',
+    },
+    'delivery.pacing': {
+      issue: 'Pacing is outside competitive comfort',
+      action: 'Aim for 140–160 WPM with 1–2s pauses at transitions and after thesis; rehearse transitions slowly.',
+      impact: 'Increases clarity and perceived confidence under judge flow.',
+    },
+    'delivery.articulation': {
+      issue: 'Articulation clarity is inconsistent',
+      action: 'Do 60 seconds of “over-enunciate” drills daily; slow down on dense lines and hit word endings.',
+      impact: 'Prevents lost arguments due to comprehension issues.',
+    },
+    'delivery.fillerWords': {
+      issue: 'Filler words disrupt authority',
+      action: 'Replace fillers with silent 1-second pauses—practice “pause instead of um” during transitions and after breaths.',
+      impact: 'Makes you sound controlled and credible to tournament judges.',
+    },
+    'language.vocabulary': {
+      issue: 'Vocabulary lacks precision/variety',
+      action: 'During prep, write 5 synonyms for your thesis keyword and use 1 higher-register term per point.',
+      impact: 'Elevates tone and reduces repetitive, casual phrasing.',
+    },
+    'language.rhetoricalDevices': {
+      issue: 'Rhetorical techniques are underused',
+      action: 'Add 1 device per speech: rule of three, contrast, metaphor, or rhetorical question—script the line during prep.',
+      impact: 'Improves memorability and persuasion beyond pure explanation.',
+    },
+    'language.emotionalAppeal': {
+      issue: 'Emotional appeal is under-developed',
+      action: 'Add one vivid human-stakes sentence per point (who is affected, what changes, why it matters).',
+      impact: 'Increases persuasion and audience connection in ballot decisions.',
+    },
+    'language.logicalAppeal': {
+      issue: 'Logical chain is not explicit enough',
+      action: 'Use signpost logic words (“because,” “therefore,” “as a result”) and restate the warrant after each example.',
+      impact: 'Makes your reasoning judge-proof and harder to poke holes in.',
+    },
+    'body.eyeContact': {
+      issue: 'Eye contact is below competitive standard',
+      action: 'Memorize thesis + closing line and use keyword-only notes; enforce a 5-second max look-down rule.',
+      impact: 'Improves authority and judge connection in key ballot moments.',
+    },
+    'body.gestures': {
+      issue: 'Gestures are distracting or too limited',
+      action: 'Keep hands above waist and use purposeful gestures only on key claims; eliminate repetitive fidgeting.',
+      impact: 'Improves presence and makes delivery feel intentional.',
+    },
+    'body.posture': {
+      issue: 'Posture/stance reduces confidence',
+      action: 'Adopt a grounded stance (feet shoulder-width) and practice delivering transitions without swaying.',
+      impact: 'Increases perceived confidence and steadiness under pressure.',
+    },
+    'body.stagePresence': {
+      issue: 'Stage presence lacks authority',
+      action: 'Increase energy on thesis/closer; pair strong eye contact with a deliberate pause before key lines.',
+      impact: 'Moves you from “good” to “tournament-ready” presence.',
+    },
+  };
+
+  const alreadyCoversKey = (key: string) => {
+    const t = templates[key];
+    if (!t) return false;
+    const signature = t.issue.toLowerCase();
+    return items.some((x) => x.issue.toLowerCase() === signature);
+  };
+
+  // Select the biggest gaps, but respect suppression rules.
+  scoreMap.sort((a, b) => a.score - b.score);
+  for (const s of scoreMap) {
+    if (items.length >= 3) break;
+    const t = templates[s.key];
+    if (!t) continue;
+    const text = `${t.issue} ${t.action} ${t.impact}`;
+    if (shouldSuppressFiller && looksLikeFiller(text)) continue;
+    if (shouldSuppressEyeContact && looksLikeEyeContact(text)) continue;
+    if (shouldSuppressPacing && looksLikePacing(text)) continue;
+    if (isTooShort && looksLikeLength(text)) continue;
+    if (alreadyCoversKey(s.key)) continue;
+    if (items.some((x) => x.issue.toLowerCase() === t.issue.toLowerCase())) continue;
+    items.push(t);
+  }
+
+  // Finally, write back as ranked priorities (1..n).
+  analysis.priorityImprovements = items.slice(0, 3).map((x, idx) => ({
+    priority: idx + 1,
+    issue: x.issue,
+    action: x.action,
+    impact: x.impact,
+  }));
+}
+
 async function transcodeVideoForAnalysis(inputPath: string): Promise<string> {
   // Target: keep payload small enough for OpenRouter reliability by downscaling and reducing bitrate.
   const outDir = path.resolve(__dirname, '../temp/transcoded');
@@ -388,8 +701,34 @@ export async function analyzeSpeechWithGemini(
   console.log(`   Video path: ${input.videoPath}`);
 
   try {
-    const durationSeconds = await getVideoDurationSeconds(input.videoPath);
-    console.log(`   🎞️  Video duration (ffprobe): ${formatDurationSeconds(durationSeconds)}`);
+    // Duration robustness:
+    // Some browser-recorded WebM files may have missing/odd container duration metadata.
+    // We try multiple ffprobe fields, optionally transcode, and finally fall back to client hint.
+    let durationSeconds: number | null = null;
+    try {
+      durationSeconds = await getVideoDurationSecondsRobust(input.videoPath);
+    } catch (e) {
+      console.warn(`⚠️ ffprobe could not determine duration for ${path.basename(input.videoPath)}. Attempting transcode fallback...`);
+      try {
+        const transcoded = await transcodeVideoForAnalysis(input.videoPath);
+        durationSeconds = await getVideoDurationSecondsRobust(transcoded);
+        console.log(`   🎞️  Duration recovered from transcoded file: ${formatDurationSeconds(durationSeconds)}`);
+      } catch (e2) {
+        const hint = typeof input.durationSecondsHint === 'number' && Number.isFinite(input.durationSecondsHint) && input.durationSecondsHint > 0
+          ? input.durationSecondsHint
+          : null;
+        if (hint) {
+          durationSeconds = hint;
+          console.warn(`⚠️ Using client-reported durationSecondsHint=${hint}s as fallback.`);
+        } else {
+          // Last resort: proceed without failing the entire analysis.
+          durationSeconds = 0;
+          console.warn('⚠️ Proceeding with durationSeconds=0 (unknown). Stats will be approximate.');
+        }
+      }
+    }
+
+    console.log(`   🎞️  Video duration (best available): ${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'}`);
 
     // Reliability: large videos often exceed gateway limits when Base64-encoded.
     // If file is large, transcode to a smaller MP4 before encoding.
@@ -410,8 +749,8 @@ export async function analyzeSpeechWithGemini(
       
       THEME: ${input.theme}
       QUOTE: ${input.quote}
-      VIDEO_DURATION_SECONDS (measured): ${Math.round(durationSeconds)}
-      VIDEO_DURATION (mm:ss, measured): ${formatDurationSeconds(durationSeconds)}
+      VIDEO_DURATION_SECONDS (best available): ${Math.round(durationSeconds)}
+      VIDEO_DURATION (mm:ss, best available): ${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'}
       
       ═══════════════════════════════════════════════════════════════════════════════
       CRITICAL JUDGING REQUIREMENTS
@@ -688,7 +1027,11 @@ export async function analyzeSpeechWithGemini(
       Provide tournament-level assessment:
       - Performance Tier: Assign one tier: Finals / Semifinals / Quarterfinals / Local / Developing
       - Tournament Readiness: Boolean (Yes/No)
-      - Priority Improvements: Rank top 3 issues by competitive impact
+      - Priority Improvements: Rank top 3 issues by competitive impact (biggest flaws first)
+        * Do NOT pick filler words unless filler rate is actually high (>= 5 per minute) or total fillers are clearly present.
+        * Do NOT pick eye contact unless estimated eye contact is below 75%.
+        * Do NOT pick pacing unless WPM is clearly outside the competitive band (below ~120 or above ~180).
+        * If the speech is too short (<4:00), length/time allocation should be priority #1.
       - Strengths: List 3-5 specific strengths (not generic praise)
       - Practice Drill: One concrete drill for next session
       - Next Session Focus: One primary goal + measurable metric
@@ -855,7 +1198,18 @@ export async function analyzeSpeechWithGemini(
     }
 
     // Backend truth: recompute duration + derived stats and guard against hallucinated ballots.
-    const durationSecondsActual = await getVideoDurationSeconds(input.videoPath);
+    // Use the same best-available duration for stats, but keep an independent attempt for safety.
+    let durationSecondsActual = durationSeconds;
+    if (!durationSecondsActual || durationSecondsActual <= 0) {
+      try {
+        durationSecondsActual = await getVideoDurationSecondsRobust(input.videoPath);
+      } catch {
+        const hint = typeof input.durationSecondsHint === 'number' && Number.isFinite(input.durationSecondsHint) && input.durationSecondsHint > 0
+          ? input.durationSecondsHint
+          : 0;
+        durationSecondsActual = hint;
+      }
+    }
     const transcriptWordCount = countWords(transcript);
 
     // If the model returned no transcript (or extremely short), do NOT trust any detailed scoring.
@@ -897,8 +1251,18 @@ export async function analyzeSpeechWithGemini(
       analysis.deliveryAnalysis.fillerWords.breakdown = fillerBreakdown;
     }
 
-    // Ensure we always provide at least 2 priority improvements (high-ROI refinements),
-    // even if the model returns too few.
+    // Priority Improvements should represent the biggest real gaps.
+    // Important: do not recommend filler/eye contact/pacing fixes when metrics show they are already fine.
+    normalizePriorityImprovements(analysis, {
+      durationSeconds: durationSecondsActual,
+      wpm,
+      fillerTotal,
+      fillerPerMinute,
+      eyeContactPercentage: analysis.bodyLanguageAnalysis?.eyeContact?.percentage,
+    });
+
+    // Ensure we always provide at least 2 improvements (high-ROI refinements),
+    // even if the model returns too few or filtering removes some.
     ensureMinPriorityImprovements(analysis, 2);
     
     console.log('✅ Analysis successful!');

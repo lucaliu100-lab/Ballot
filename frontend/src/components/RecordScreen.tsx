@@ -311,6 +311,8 @@ function RecordScreen({
       // Create FormData to send the file
       const formData = new FormData();
       formData.append('file', recordedBlob, 'recording.webm');
+      // Provide duration hint to backend for robustness (some WebM containers lack duration metadata).
+      formData.append('durationSeconds', String(recordingDuration));
 
       // Send to our backend
       const response = await fetch(API_ENDPOINTS.upload, {

@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { UploadResponse, DebateAnalysis, SpeechStats } from '../types';
+import { UploadResponse, DebateAnalysis } from '../types';
 import { API_ENDPOINTS } from '../lib/constants';
 
 // Props that this component receives from its parent
