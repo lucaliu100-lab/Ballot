@@ -384,29 +384,56 @@ app.post('/api/process-all', async (req, res) => {
           bodyLanguage: { score: 6, weight: 0.15, weighted: 0.9 }
         },
         contentAnalysis: {
-          topicAdherence: { score: 7, feedback: "[Mock] Good adherence to the theme." },
-          argumentStructure: { score: 6, feedback: "[Mock] Clear structure but needs more development." },
+          topicAdherence: { 
+            score: 7, 
+            feedback: "**Score Justification:** You addressed the theme consistently throughout the speech, maintaining focus on the central thesis. Your interpretation was reasonable and defensible.\n\n**Evidence from Speech:**\n- Opening (0:15): Directly referenced the quote and established clear connection\n- Middle sections (1:30, 2:45): All points tied back to the theme\n- Avoided tangents and stayed on topic throughout\n\n**What This Means:** Your topic adherence is strong for local tournaments. You understand how to maintain thematic consistency.\n\n**How to Improve:**\n1. Deepen your interpretation: Instead of surface-level connection, explore nuanced meanings of the quote\n2. Explicitly link back: After each point, state \"This relates to [quote] because...\"\n3. Test each example: Ask \"Does this advance my thesis?\" before including it" 
+          },
+          argumentStructure: { 
+            score: 6, 
+            feedback: "**Score Justification:** You had a clear three-part structure (intro, body, conclusion), but transitions were weak and point development was uneven.\n\n**Evidence from Speech:**\n- Introduction (0:00-0:30): Clear thesis, but no roadmap previewing your points\n- Body: Two main points, but transition at 2:00 was abrupt (\"Also, another thing...\")\n- Conclusion: Summarized well but introduced new idea at 4:45\n\n**What This Means:** Your basic structure is sound, but competitive debaters need explicit signposting and balanced point development.\n\n**How to Improve:**\n1. Add roadmap: \"Today I'll explore three ways...\" in your intro (10 seconds)\n2. Use explicit transitions: \"My first point...\" \"Moving to my second point...\" \"Finally...\"\n3. Time your points: Aim for equal development (90 seconds each for two points)" 
+          },
           depthOfAnalysis: { score: 5, feedback: "[Mock] Surface level analysis." },
           examplesEvidence: { score: 6, feedback: "[Mock] Good examples used." },
           timeManagement: { score: 7, feedback: "[Mock] Good use of time." }
         },
         deliveryAnalysis: {
-          vocalVariety: { score: 7, feedback: "[Mock] Good tone changes." },
-          pacing: { score: 7, wpm: 145, feedback: "[Mock] Pacing is ideal." },
+          vocalVariety: { 
+            score: 7, 
+            feedback: "**Score Justification:** You demonstrated good vocal variety with clear tone changes and pitch modulation, though some sections remained in a single register.\n\n**Evidence from Speech:**\n- Opening (0:00-0:30): Dynamic introduction with rising pitch on key words\n- Point 1 (1:00-2:00): Maintained energy and varied tone appropriately\n- Point 2 (2:30-3:00): Became somewhat monotone during explanation at 2:45\n\n**What This Means:** Your vocal variety is competitive-ready for most sections, but needs consistency throughout to maintain audience engagement.\n\n**How to Improve:**\n1. Mark emphasis words during prep: Underline 3-5 words per point to emphasize with volume/pitch\n2. Use the \"Three Tones\" technique: Explanatory (mid-range), Narrative (warm, lower), Persuasive (high energy)\n3. Record and exaggerate: Practice with 50% more variety than feels natural—it will sound more engaging" 
+          },
+          pacing: { 
+            score: 7, 
+            wpm: 145, 
+            feedback: "**Score Justification:** Your pace of 145 WPM falls within the optimal competitive range (140-160 WPM), and you used some strategic pauses.\n\n**Evidence from Speech:**\n- Overall WPM: 145 (725 words ÷ 5 minutes)  \n- Good pace during opening and conclusion\n- Rushed slightly during transition at 2:00 (approximately 170 WPM burst)\n- Used 2-second pause before thesis at 0:28 (excellent)\n\n**What This Means:** Your pacing is tournament-ready. The slight rush during transitions is common and easily fixable.\n\n**How to Improve:**\n1. Script transitions word-for-word during prep to avoid rushing between points\n2. Use \"count to three\" pauses after major statements (thesis, point summaries, before conclusion)\n3. Mark \"SLOW\" on prep paper at sections where you tend to rush" 
+          },
           articulation: { score: 7, feedback: "[Mock] Clear enunciation." },
-          fillerWords: { score: 8, total: 12, perMinute: 2.5, breakdown: { "um": 5, "uh": 7 }, feedback: "[Mock] Low filler word count." }
+          fillerWords: { score: 8, total: 12, perMinute: 2.5, breakdown: { "um": 5, "uh": 7 }, feedback: "[Mock] Excellent filler control. Rate of 2.5 per minute is well below the 5/min competitive target." }
         },
         languageAnalysis: {
-          vocabulary: { score: 7, feedback: "[Mock] Sophisticated vocabulary." },
-          rhetoricalDevices: { score: 6, examples: ["Rule of three"], feedback: "[Mock] Good use of rhetorical devices." },
-          emotionalAppeal: { score: 7, feedback: "[Mock] Strong pathos." },
-          logicalAppeal: { score: 7, feedback: "[Mock] Clear logos." }
+          vocabulary: { 
+            score: 7, 
+            feedback: "**Score Justification:** Your vocabulary was strong with good variety and academic register. Some repetition of key terms, but overall demonstrated linguistic sophistication.\n\n**Evidence from Speech:**\n- Used \"contentment\" and \"fulfillment\" instead of repeatedly saying \"happiness\" (good synonym variety)\n- Academic terms: \"intrinsic motivation\" (1:30), \"emotional intelligence\" (2:45)\n- Avoided casual phrases like \"stuff\" or \"things\" (professional register maintained)\n\n**What This Means:** Your vocabulary elevates your content to competitive level. You sound like a serious debater, not a casual speaker.\n\n**How to Improve:**\n1. Create synonym bank during prep: Write 5 synonyms for your key concept to rotate through speech\n2. Learn 2-3 academic terms per topic: For happiness topics, add \"hedonic adaptation,\" \"positive psychology,\" \"self-determination theory\"\n3. Use \"power verbs\": Replace \"makes us happy\" with \"cultivates joy,\" \"fosters well-being,\" \"generates contentment\"" 
+          },
+          rhetoricalDevices: { 
+            score: 6, 
+            examples: ["Rule of three at 3:20", "Rhetorical question at 0:15"], 
+            feedback: "**Score Justification:** You used 2-3 rhetorical devices effectively, though integration could be more natural and variety could increase.\n\n**Evidence from Speech:**\n- Rhetorical question (0:15): \"What makes life meaningful?\" - effective hook\n- Rule of three (3:20): \"Through gratitude, through service, through challenge\" - memorable structure\n- Missed opportunities: Could have used metaphor, analogy, or parallel structure\n\n**What This Means:** You understand rhetorical devices but haven't fully integrated them as persuasive tools. Competitive speeches typically use 4-5 distinct devices.\n\n**How to Improve:**\n1. Add one metaphor per speech: \"Happiness isn't a destination—it's fuel for the journey\"\n2. Use parallel structure: \"We create happiness when we choose gratitude, when we pursue challenge, when we serve others\"\n3. End with anaphora: \"Tomorrow, build your happiness. Tomorrow, own your joy. Tomorrow, create your fulfillment.\"" 
+          },
+          emotionalAppeal: { score: 7, feedback: "[Mock] Strong pathos with good personal storytelling." },
+          logicalAppeal: { score: 7, feedback: "[Mock] Clear cause-effect reasoning with strong logical connectors." }
         },
         bodyLanguageAnalysis: {
-          eyeContact: { score: 6, percentage: 65, feedback: "[Mock] Good eye contact but could be more consistent." },
-          gestures: { score: 7, feedback: "[Mock] Purposeful gestures." },
-          posture: { score: 7, feedback: "[Mock] Confident posture." },
-          stagePresence: { score: 7, feedback: "[Mock] Strong stage presence." }
+          eyeContact: { 
+            score: 6, 
+            percentage: 65, 
+            feedback: "**Score Justification:** Your eye contact was 65% throughout the speech—below the competitive target of 75%+ but better than average. You broke eye contact during key moments which weakened impact.\n\n**Evidence from Speech:**\n- Opening (0:00-0:15): Strong 80% eye contact during hook\n- Thesis (0:28-0:35): Looked down at notes for 5 of 7 seconds—critical moment lost\n- Body points: Maintained 70% contact during first point, dropped to 50% during second point (2:30-3:15)\n- Conclusion: Good recovery with 75% contact, but final statement delivered while looking at notes\n\n**What This Means:** You need to memorize your most important moments (thesis, conclusion, key examples) to maintain connection with judges during these high-impact seconds.\n\n**How to Improve:**\n1. Minimal notes rule: Write only keywords on prep paper (\"P1: Gratitude | Ex: journal\"), not full sentences\n2. Memorize \"big three\": Thesis, best example, and closing sentence must be 100% from memory\n3. Five-second rule: Never look down for more than 5 consecutive seconds. Glance, absorb, look up, speak for 20+ seconds before next glance" 
+          },
+          gestures: { 
+            score: 7, 
+            feedback: "**Score Justification:** Your gestures were purposeful and natural, with good variety and appropriate timing. Minor issue: hands occasionally dropped to sides during explanatory sections.\n\n**Evidence from Speech:**\n- Opening: Open gestures, hands above waist, inviting (excellent)\n- Point 1 (1:30): Emphasized \"three ways\" with three fingers (perfect timing)\n- Point 2 (2:45): Hands dropped to sides for 15 seconds during explanation (lost energy)\n- Conclusion: Strong closing gesture on final words\n\n**What This Means:** Your gestures enhance your message when you use them. The key is maintaining gesture energy throughout, not just in high-energy moments.\n\n**How to Improve:**\n1. \"Hands above waist\" rule: Keep hands at chest/stomach level as default position, never hanging at sides\n2. Mark gesture moments during prep: Note 2-3 places per point where you'll use emphatic gestures\n3. Practice \"gesture hold\": After making a gesture (e.g., counting on fingers), hold it for 2-3 seconds before transitioning" 
+          },
+          posture: { score: 7, feedback: "[Mock] Confident, upright posture maintained throughout. Good professional presence." },
+          stagePresence: { score: 7, feedback: "[Mock] Strong stage presence with good energy and confidence. Excellent audience connection." }
         },
         speechStats: {
           duration: "5:00",
@@ -443,7 +470,8 @@ app.post('/api/process-all', async (req, res) => {
     });
 
     if (!result.success) {
-      return res.status(500).json({ error: result.error || 'Gemini analysis failed' });
+      // Return the exact failure reason (no secrets) so the frontend can show meaningful "technical details".
+      return res.status(500).json({ error: result.error || 'Analysis failed' });
     }
 
     res.json({

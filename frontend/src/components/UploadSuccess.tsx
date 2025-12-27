@@ -26,6 +26,7 @@ interface UploadSuccessProps {
 function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: UploadSuccessProps) {
   const [isProcessing, setIsProcessing] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const startedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -36,13 +37,15 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
 
     const interval = setInterval(() => {
       setProgress(prev => {
-        // Make progress feel responsive (up to 95%), without forcing a long wait.
-        if (prev < 30) return prev + 5;      // fast ramp
-        if (prev < 80) return prev + 2;      // steady
-        if (prev < 95) return prev + 1;      // slow finish
+        // Championship-caliber progress logic:
+        // Starts slower to signal thoroughness, slows down at the end for "deep evaluation".
+        if (prev < 40) return prev + 2;      // Careful start
+        if (prev < 80) return prev + 1.5;    // Systematic analysis
+        if (prev < 92) return prev + 0.5;    // Finalizing scoring matrices
+        if (prev < 98) return prev + 0.1;    // Deep NSDA standard verification
         return prev;
       });
-    }, 250);
+    }, 400);
 
     return () => clearInterval(interval);
   }, [isProcessing]);
@@ -57,14 +60,14 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
       setError(null);
 
       try {
-        console.log('🌟 Requesting multimodal analysis from Gemini...');
+        console.log('🌟 Initiating professional performance evaluation...');
 
         abortRef.current?.abort();
         const controller = new AbortController();
         abortRef.current = controller;
 
-        // Hard timeout to prevent “infinite loading” UX
-        const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
+        // Championship-grade timeout (5 minutes) to handle 7-minute competitive speeches
+        const timeoutId = window.setTimeout(() => controller.abort(), 300_000);
 
         const response = await fetch(API_ENDPOINTS.processAll, {
           method: 'POST',
@@ -109,9 +112,13 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
       } catch (err) {
         console.error('❌ Failed to process analysis:', err);
         if (err instanceof Error && err.name === 'AbortError') {
-          setError('Analysis timed out. Please try again.');
+          setError('We’re sorry — we couldn’t generate your ballot in time. This is a known reliability issue we’re actively fixing. Please try again.');
+          setErrorDetails('Request timed out while waiting for the analysis service.');
         } else {
-          setError(err instanceof Error ? err.message : 'Analysis failed. Please try again.');
+          const raw = err instanceof Error ? err.message : 'Analysis failed. Please try again.';
+          // Professional user-facing message + keep technicals available on demand.
+          setError('We’re sorry — we couldn’t generate your ballot right now. This is a known reliability issue we’re actively fixing. Please try again.');
+          setErrorDetails(raw);
         }
         setIsProcessing(false);
       }
@@ -123,9 +130,9 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Analyzing Your Speech</h1>
+        <h1 style={styles.title}>Evaluating Your Performance</h1>
         <p style={styles.subtitle}>
-          Gemini 2.0 Flash is "watching" and "listening" to your recording...
+          Applying NSDA Championship Standards to your recording...
         </p>
       </div>
 
@@ -140,13 +147,19 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
             />
           </div>
           <p style={styles.progressText}>
-            {isProcessing ? `Analysis in progress: ${progress}%` : error ? 'Error occurred' : 'Analysis complete!'}
+            {isProcessing ? `Analysis in progress: ${Math.floor(progress)}%` : error ? 'Error occurred' : 'Analysis complete!'}
           </p>
         </div>
 
         {error && (
           <div style={styles.errorBox}>
             <p style={styles.errorText}>{error}</p>
+            {errorDetails && (
+              <details style={styles.errorDetails}>
+                <summary style={styles.errorDetailsSummary}>Technical details</summary>
+                <pre style={styles.errorDetailsPre}>{errorDetails}</pre>
+              </details>
+            )}
             <button
               onClick={() => window.location.reload()}
               style={styles.retryButton}
@@ -162,9 +175,9 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
               {isProcessing ? '' : '✓'}
             </div>
             <div style={styles.stepContent}>
-              <h3 style={styles.stepTitle}>Multimodal Feedback</h3>
+              <h3 style={styles.stepTitle}>Championship Evaluation</h3>
               <p style={styles.stepDesc}>
-                Gemini is generating transcription, body language analysis, and debate scores in one pass.
+                Conducting full technical analysis of argument structure, delivery metrics, and body language under competitive tournament conditions.
               </p>
             </div>
           </div>
@@ -220,7 +233,7 @@ const styles: Record<string, React.CSSProperties> = {
   progressFill: {
     height: '100%',
     background: '#000000',
-    transition: 'width 0.3s ease-out',
+    transition: 'width 0.4s cubic-bezier(0.1, 0.7, 1.0, 0.1)', // Eased for "Zoom" effect at the end
   },
   progressText: {
     color: '#111111',
@@ -300,6 +313,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.9rem',
     fontWeight: 500,
     cursor: 'pointer',
+  },
+  errorDetails: {
+    margin: '12px 0 16px 0',
+  },
+  errorDetailsSummary: {
+    cursor: 'pointer',
+    color: '#111111',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+  },
+  errorDetailsPre: {
+    marginTop: '10px',
+    padding: '12px',
+    background: 'rgba(0,0,0,0.04)',
+    borderRadius: '8px',
+    fontSize: '0.8rem',
+    lineHeight: 1.4,
+    overflowX: 'auto',
+    whiteSpace: 'pre-wrap',
+    color: '#111111',
   },
   contextBox: {
     padding: '24px',

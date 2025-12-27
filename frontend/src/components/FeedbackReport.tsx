@@ -16,7 +16,7 @@
  * - Start a new round (new theme/quotes)
  */
 
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { id } from '@instantdb/react';
 import { db } from '../lib/instant';
 import { DebateAnalysis } from '../types';
@@ -52,6 +52,131 @@ interface FeedbackReportProps {
   onNewRound: () => void;     // Start fresh with new theme
   onGoHome: () => void;       // Return to homepage
 }
+
+// Helper to parse the technical feedback string into structured parts
+function parseFeedback(text: string) {
+  const sections = {
+    justification: "",
+    evidence: [] as string[],
+    meaning: "",
+    improvement: [] as string[]
+  };
+
+  if (!text) return sections;
+
+  // Extract Score Justification
+  const justificationMatch = text.match(/\*\*Score Justification:\*\*([\s\S]*?)(?=\*\*|$)/i);
+  if (justificationMatch) sections.justification = justificationMatch[1].trim();
+
+  // Extract What This Means
+  const meaningMatch = text.match(/\*\*What This Means:\*\*([\s\S]*?)(?=\*\*|$)/i);
+  if (meaningMatch) sections.meaning = meaningMatch[1].trim();
+
+  // Extract Evidence bullet points
+  const evidenceLines = text.match(/\*\*Evidence from Speech:\*\*([\s\S]*?)(?=\*\*|$)/i);
+  if (evidenceLines) {
+    sections.evidence = evidenceLines[1]
+      .split("\n")
+      .map(l => l.replace(/^[-*]\s*/, "").trim())
+      .filter(l => l.length > 0);
+  }
+
+  // Extract How to Improve bullet points
+  const improvementLines = text.match(/\*\*How to Improve:\*\*([\s\S]*?)(?=\*\*|$)/i);
+  if (improvementLines) {
+    sections.improvement = improvementLines[1]
+      .split("\n")
+      .map(l => l.replace(/^\d+\.\s*/, "").trim())
+      .filter(l => l.length > 0);
+  }
+
+  // If no sections found, treat whole text as justification
+  if (!sections.justification && !sections.evidence.length && !sections.meaning && !sections.improvement.length) {
+    sections.justification = text.replace(/\*\*/g, '').trim();
+  }
+
+  return sections;
+}
+
+interface AnalysisItemProps {
+  title: string;
+  score: number;
+  feedback: string;
+  showProgress?: boolean;
+}
+
+const AnalysisItem = ({ title, score, feedback, showProgress = true }: AnalysisItemProps) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const parsed = parseFeedback(feedback);
+  
+  return (
+    <div style={styles.analysisItem}>
+      <div style={styles.analysisHeader}>
+        <div style={styles.analysisTitleGroup}>
+          <span style={styles.analysisTitle}>{title}</span>
+          <span style={styles.scoreBadge}>{score.toFixed(1)}</span>
+        </div>
+        <div style={styles.analysisScore}>
+          {showProgress && (
+            <div style={styles.progressBarBg}>
+              <div style={{ ...styles.progressBarFill, width: `${score * 10}%`, background: getScoreColor(score) }} />
+            </div>
+          )}
+          <button 
+            onClick={() => setIsExpanded(!isExpanded)} 
+            style={styles.expandButton}
+          >
+            {isExpanded ? 'Hide Details ↑' : 'Deep Dive ↓'}
+          </button>
+        </div>
+      </div>
+
+      <div style={styles.feedbackContainerCompact}>
+        {parsed.justification && (
+          <p style={styles.justificationText}>{parsed.justification}</p>
+        )}
+        
+        {isExpanded && (
+          <div style={styles.expandedContent}>
+            <div style={styles.divider} />
+            
+            {parsed.evidence.length > 0 && (
+              <div style={styles.detailSection}>
+                <div style={styles.detailLabel}>EVIDENCE FROM SPEECH</div>
+                <ul style={styles.evidenceList}>
+                  {parsed.evidence.map((item, i) => (
+                    <li key={i} style={styles.evidenceItem}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {parsed.meaning && (
+              <div style={styles.detailSection}>
+                <div style={styles.detailLabel}>JUDGE'S RATIONALE</div>
+                <p style={styles.meaningText}>{parsed.meaning}</p>
+              </div>
+            )}
+
+            {parsed.improvement.length > 0 && (
+              <div style={styles.detailSection}>
+                <div style={styles.detailLabel}>CHAMPIONSHIP DRILLS</div>
+                <div style={styles.improvementGrid}>
+                  {parsed.improvement.map((item, i) => (
+                    <div key={i} style={styles.improvementCard}>
+                      <div style={styles.improvementNumber}>{i + 1}</div>
+                      <div style={styles.improvementText}>{item}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 function FeedbackReport({
   analysis,
@@ -179,7 +304,7 @@ function FeedbackReport({
               {score.toFixed(1)}
             </text>
           </svg>
-        </div>
+          </div>
         <div style={styles.scoreInfo}>
           <div style={styles.scoreLabelMain}>{label}</div>
           <div style={styles.scoreWeight}>{weight} weight</div>
@@ -187,6 +312,35 @@ function FeedbackReport({
       </div>
     );
   };
+
+  // -------------------------------------------
+  // STATS BAR (single source of truth w/ fallbacks)
+  // -------------------------------------------
+  const derivedWordCount = useMemo(() => {
+    const t = (transcript || '').trim();
+    if (!t) return 0;
+    return t.split(/\s+/).filter(Boolean).length;
+  }, [transcript]);
+
+  const statsDuration =
+    analysis.speechStats?.duration && analysis.speechStats.duration !== 'string'
+      ? analysis.speechStats.duration
+      : '—';
+
+  const statsWords =
+    typeof analysis.speechStats?.wordCount === 'number' && analysis.speechStats.wordCount > 0
+      ? analysis.speechStats.wordCount
+      : derivedWordCount;
+
+  const statsWpm =
+    typeof analysis.speechStats?.wpm === 'number' && analysis.speechStats.wpm > 0
+      ? analysis.speechStats.wpm
+      : (analysis.deliveryAnalysis?.pacing?.wpm || 0);
+
+  const statsFillers =
+    typeof analysis.speechStats?.fillerWordCount === 'number' && analysis.speechStats.fillerWordCount > 0
+      ? analysis.speechStats.fillerWordCount
+      : (analysis.deliveryAnalysis?.fillerWords?.total || 0);
 
   return (
     <div style={styles.container}>
@@ -204,15 +358,6 @@ function FeedbackReport({
           <h1 style={styles.title}>Tournament Ballot</h1>
           <p style={styles.subtitle}>NSDA-Standard Impromptu Evaluation</p>
         </div>
-        <div style={styles.overallScoreCard}>
-          <div style={styles.overallScoreTop}>OVERALL SCORE</div>
-          <div style={{ ...styles.overallScoreValue, color: getScoreColor(analysis.overallScore) }}>
-            {analysis.overallScore.toFixed(1)}<span style={styles.overallMax}>/10.0</span>
-          </div>
-          <div style={styles.readinessRow}>
-            Tournament Ready: <span style={{ fontWeight: 700, color: analysis.tournamentReady ? '#059669' : '#dc2626' }}>{analysis.tournamentReady ? 'YES' : 'NO'}</span>
-          </div>
-        </div>
       </div>
 
       {/* Score Rings Section */}
@@ -221,25 +366,25 @@ function FeedbackReport({
         {renderScoreRing(analysis.categoryScores.delivery.score, 'Delivery', '30%')}
         {renderScoreRing(analysis.categoryScores.language.score, 'Language', '15%')}
         {renderScoreRing(analysis.categoryScores.bodyLanguage.score, 'Body Language', '15%')}
-      </div>
+          </div>
 
       {/* Stats Bar */}
       <div style={styles.statsBar}>
         <div style={styles.statsBarItem}>
           <div style={styles.statsBarLabel}>DURATION</div>
-          <div style={styles.statsBarValue}>{analysis.speechStats.duration}</div>
-        </div>
+          <div style={styles.statsBarValue}>{statsDuration}</div>
+          </div>
         <div style={styles.statsBarItem}>
           <div style={styles.statsBarLabel}>WORDS</div>
-          <div style={styles.statsBarValue}>{analysis.speechStats.wordCount}</div>
+          <div style={styles.statsBarValue}>{statsWords}</div>
         </div>
         <div style={styles.statsBarItem}>
           <div style={styles.statsBarLabel}>PACE</div>
-          <div style={styles.statsBarValue}>{analysis.speechStats.wpm} WPM</div>
+          <div style={styles.statsBarValue}>{statsWpm} WPM</div>
         </div>
         <div style={styles.statsBarItem}>
           <div style={styles.statsBarLabel}>FILLERS</div>
-          <div style={styles.statsBarValue}>{analysis.speechStats.fillerWordCount} total</div>
+          <div style={styles.statsBarValue}>{statsFillers} total</div>
         </div>
       </div>
 
@@ -247,47 +392,40 @@ function FeedbackReport({
       <div style={styles.contentGrid}>
         {/* Left Column */}
         <div style={styles.leftCol}>
+          {/* CONTENT ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
-            
-            <div style={styles.analysisItem}>
-              <div style={styles.analysisHeader}>
-                <span style={styles.analysisTitle}>Topic Adherence</span>
-                <div style={styles.analysisScore}>
-                  <div style={styles.progressBarBg}>
-                    <div style={{ ...styles.progressBarFill, width: `${analysis.contentAnalysis.topicAdherence.score * 10}%` }} />
-                  </div>
-                  <span style={styles.scoreText}>{analysis.contentAnalysis.topicAdherence.score}/10</span>
-                </div>
-              </div>
-              <p style={styles.analysisFeedback}>{analysis.contentAnalysis.topicAdherence.feedback}</p>
-            </div>
-
-            <div style={styles.analysisItem}>
-              <div style={styles.analysisHeader}>
-                <span style={styles.analysisTitle}>Argument Structure</span>
-                <div style={styles.analysisScore}>
-                  <div style={styles.progressBarBg}>
-                    <div style={{ ...styles.progressBarFill, width: `${analysis.contentAnalysis.argumentStructure.score * 10}%` }} />
-                  </div>
-                  <span style={styles.scoreText}>{analysis.contentAnalysis.argumentStructure.score}/10</span>
-                </div>
-              </div>
-              <p style={styles.analysisFeedback}>{analysis.contentAnalysis.argumentStructure.feedback}</p>
-            </div>
+            <AnalysisItem 
+              title="Topic Adherence" 
+              score={analysis.contentAnalysis.topicAdherence.score} 
+              feedback={analysis.contentAnalysis.topicAdherence.feedback} 
+            />
+            <AnalysisItem 
+              title="Argument Structure" 
+              score={analysis.contentAnalysis.argumentStructure.score} 
+              feedback={analysis.contentAnalysis.argumentStructure.feedback} 
+            />
+            <AnalysisItem 
+              title="Depth of Analysis" 
+              score={analysis.contentAnalysis.depthOfAnalysis.score} 
+              feedback={analysis.contentAnalysis.depthOfAnalysis.feedback} 
+            />
           </div>
 
+          {/* DELIVERY ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Delivery Analysis (30%)</h2>
+            <AnalysisItem 
+              title="Vocal Variety" 
+              score={analysis.deliveryAnalysis.vocalVariety.score} 
+              feedback={analysis.deliveryAnalysis.vocalVariety.feedback} 
+            />
+            <AnalysisItem 
+              title="Pacing & Tempo" 
+              score={analysis.deliveryAnalysis.pacing.score} 
+              feedback={analysis.deliveryAnalysis.pacing.feedback} 
+            />
             
-            <div style={styles.analysisItem}>
-              <div style={styles.analysisHeader}>
-                <span style={styles.analysisTitle}>Vocal Variety</span>
-                <span style={styles.scoreTextPlain}>{analysis.deliveryAnalysis.vocalVariety.score}/10</span>
-              </div>
-              <p style={styles.analysisFeedback}>{analysis.deliveryAnalysis.vocalVariety.feedback}</p>
-            </div>
-
             <div style={styles.fillerBreakdown}>
               <div style={styles.fillerLabel}>Filler Word Breakdown</div>
               <div style={styles.fillerBadges}>
@@ -306,6 +444,36 @@ function FeedbackReport({
                 )}
               </div>
             </div>
+          </div>
+
+          {/* LANGUAGE ANALYSIS */}
+          <div style={styles.analysisSectionWithBg}>
+            <h2 style={styles.sectionHeader}>| Language Use (15%)</h2>
+            <AnalysisItem 
+              title="Vocabulary Sophistication" 
+              score={analysis.languageAnalysis.vocabulary.score} 
+              feedback={analysis.languageAnalysis.vocabulary.feedback} 
+            />
+            <AnalysisItem 
+              title="Rhetorical Devices" 
+              score={analysis.languageAnalysis.rhetoricalDevices.score} 
+              feedback={analysis.languageAnalysis.rhetoricalDevices.feedback} 
+            />
+          </div>
+
+          {/* BODY LANGUAGE ANALYSIS */}
+          <div style={styles.analysisSectionWithBg}>
+            <h2 style={styles.sectionHeader}>| Body Language & Presence (15%)</h2>
+            <AnalysisItem 
+              title="Eye Contact" 
+              score={analysis.bodyLanguageAnalysis.eyeContact.score} 
+              feedback={analysis.bodyLanguageAnalysis.eyeContact.feedback} 
+            />
+            <AnalysisItem 
+              title="Gestures & Posture" 
+              score={analysis.bodyLanguageAnalysis.gestures.score} 
+              feedback={analysis.bodyLanguageAnalysis.gestures.feedback} 
+            />
           </div>
 
           <div style={styles.analysisSection}>
@@ -340,6 +508,16 @@ function FeedbackReport({
 
         {/* Right Column */}
         <div style={styles.rightCol}>
+          <div style={styles.overallScoreCard}>
+            <div style={styles.overallScoreTop}>OVERALL SCORE</div>
+            <div style={{ ...styles.overallScoreValue, color: getScoreColor(analysis.overallScore) }}>
+              {analysis.overallScore.toFixed(1)}<span style={styles.overallMax}>/10.0</span>
+            </div>
+            <div style={styles.readinessRow}>
+              Tournament Ready: <span style={{ fontWeight: 700, color: analysis.tournamentReady ? '#059669' : '#dc2626' }}>{analysis.tournamentReady ? 'YES' : 'NO'}</span>
+            </div>
+          </div>
+
           <div style={styles.priorityBox}>
             <h3 style={styles.priorityBoxTitle}>Priority Improvements</h3>
             {analysis.priorityImprovements.map((imp) => (
@@ -350,18 +528,18 @@ function FeedbackReport({
                 </div>
                 <div style={styles.priorityDetail}>
                   <span style={{ ...styles.boldLabel, color: '#dc2626' }}>Impact:</span> {imp.impact}
-                </div>
-              </div>
-            ))}
           </div>
+        </div>
+            ))}
+        </div>
 
-          <div style={styles.drillBox}>
+        <div style={styles.drillBox}>
             <h3 style={styles.drillBoxTitle}>Practice Drill</h3>
             <p style={styles.drillText}>{analysis.practiceDrill}</p>
             <div style={styles.nextFocus}>
               <span style={styles.nextFocusLabel}>Next Focus:</span> {analysis.nextSessionFocus.primary}
             </div>
-          </div>
+        </div>
 
           <div style={styles.strengthsSection}>
             <h3 style={styles.sectionHeader}>| Strengths to Maintain</h3>
@@ -451,6 +629,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
     boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
     minWidth: '200px',
+    marginBottom: '32px',
   },
   overallScoreTop: {
     fontSize: '0.7rem',
@@ -561,18 +740,18 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#fafafa',
     border: '1px solid #f0f0f0',
     borderRadius: '16px',
-    padding: '32px',
-    marginBottom: '32px',
+    padding: '24px',
+    marginBottom: '24px',
   },
   sectionHeader: {
-    fontSize: '1.25rem',
+    fontSize: '1.15rem',
     fontWeight: 800,
-    marginBottom: '32px',
+    marginBottom: '24px',
     display: 'flex',
     alignItems: 'center',
   },
   analysisItem: {
-    marginBottom: '32px',
+    marginBottom: '24px',
   },
   analysisHeader: {
     display: 'flex',
@@ -580,14 +759,34 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     marginBottom: '12px',
   },
-  analysisTitle: {
-    fontSize: '1rem',
+  analysisTitleGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  scoreBadge: {
+    background: '#111111',
+    color: '#ffffff',
+    padding: '2px 8px',
+    borderRadius: '4px',
+    fontSize: '0.8rem',
     fontWeight: 700,
   },
   analysisScore: {
     display: 'flex',
     alignItems: 'center',
     gap: '16px',
+  },
+  expandButton: {
+    background: 'none',
+    border: 'none',
+    color: '#0066cc',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px',
+    transition: 'background 0.2s',
   },
   progressBarBg: {
     width: '120px',
@@ -607,10 +806,94 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: '40px',
     textAlign: 'right',
   },
-  scoreTextPlain: {
-    fontSize: '0.9rem',
-    fontWeight: 600,
+  feedbackContainerCompact: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    padding: '20px',
+    background: '#ffffff',
+    borderRadius: '12px',
+    border: '1px solid #f0f0f0',
+  },
+  expandedContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '24px',
+  },
+  divider: {
+    height: '1px',
+    background: '#f0f0f0',
+    width: '100%',
+  },
+  justificationText: {
+    fontSize: '1rem',
+    lineHeight: 1.6,
+    color: '#111111',
+    margin: 0,
+    fontWeight: 500,
+  },
+  detailSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  detailLabel: {
+    fontSize: '0.75rem',
+    fontWeight: 800,
+    color: '#999999',
+    letterSpacing: '0.05em',
+  },
+  evidenceList: {
+    margin: 0,
+    paddingLeft: '20px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  evidenceItem: {
+    fontSize: '0.95rem',
+    color: '#444444',
+    lineHeight: 1.5,
+  },
+  meaningText: {
+    fontSize: '0.95rem',
+    lineHeight: 1.5,
     color: '#666666',
+    margin: 0,
+    fontStyle: 'italic',
+  },
+  improvementGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+    gap: '16px',
+  },
+  improvementCard: {
+    background: '#f8fafc',
+    padding: '16px',
+    borderRadius: '8px',
+    display: 'flex',
+    gap: '12px',
+    alignItems: 'flex-start',
+    border: '1px solid #e2e8f0',
+  },
+  improvementNumber: {
+    background: '#000000',
+    color: '#ffffff',
+    width: '20px',
+    height: '20px',
+    borderRadius: '10px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '0.7rem',
+    fontWeight: 800,
+    flexShrink: 0,
+    marginTop: '2px',
+  },
+  improvementText: {
+    fontSize: '0.9rem',
+    lineHeight: 1.5,
+    color: '#334155',
   },
   analysisFeedback: {
     fontSize: '0.95rem',
@@ -690,6 +973,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: '32px',
+    position: 'sticky',
+    top: '40px',
   },
   priorityBox: {
     background: '#fff1f2',
