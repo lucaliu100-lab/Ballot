@@ -51,6 +51,7 @@ interface FeedbackReportProps {
   onRedoRound: () => void;    // Redo with same quote
   onNewRound: () => void;     // Start fresh with new theme
   onGoHome: () => void;       // Return to homepage
+  backLabel?: string;         // Optional custom label for back button
 }
 
 // Helper to parse the technical feedback string into structured parts
@@ -188,6 +189,7 @@ function FeedbackReport({
   onRedoRound,
   onNewRound,
   onGoHome,
+  backLabel = "← Back to Dashboard",
 }: FeedbackReportProps) {
   // Track if we've already saved this session
   const savedRef = useRef(false);
@@ -265,7 +267,8 @@ function FeedbackReport({
 
   // Helper to render a score circle
   const renderScoreRing = (score: number, label: string, weight: string) => {
-    const color = getScoreColor(score);
+    // Tournament Yellow styling
+    const color = '#ca8a04'; 
     const radius = 42;
     const circumference = 2 * Math.PI * radius;
     const offset = circumference - (score / 10) * circumference;
@@ -346,7 +349,7 @@ function FeedbackReport({
     <div style={styles.container}>
       {/* Top Navigation */}
       <button onClick={onGoHome} style={styles.backLink}>
-        ← Back to Dashboard
+        {backLabel}
       </button>
 
       {/* Header */}
@@ -510,7 +513,7 @@ function FeedbackReport({
         <div style={styles.rightCol}>
           <div style={styles.overallScoreCard}>
             <div style={styles.overallScoreTop}>OVERALL SCORE</div>
-            <div style={{ ...styles.overallScoreValue, color: getScoreColor(analysis.overallScore) }}>
+            <div style={{ ...styles.overallScoreValue, color: '#ca8a04' }}>
               {analysis.overallScore.toFixed(1)}<span style={styles.overallMax}>/10.0</span>
             </div>
             <div style={styles.readinessRow}>

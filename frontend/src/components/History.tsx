@@ -1,531 +1,718 @@
 /**
  * History / Progress Component
  * 
- * Displays the user's past practice sessions from InstantDB.
- * Shows:
- * - Fixed progress line graph on the right side
- * - List of sessions with scores, themes, WPM, duration, and dates
- * - Expandable details for each session
- * - Visual score indicators
+ * Displays:
+ * - Top Section: 6 Key Metric Cards + Tournament Readiness Dashboard
+ * - Performance Trends Chart
+ * - Bottom Section: Priority Improvements (Left, Sticky) + Recent Rounds List (Right)
  */
 
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { db } from '../lib/instant';
-import { getScoreColor, formatDate } from '../lib/utils';
+import { formatDate } from '../lib/utils';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer
+} from 'recharts';
 
 interface HistoryProps {
-  onClose: () => void;  // Go back to main app
+  onClose: () => void;
+  onSelectSession?: (session: any) => void;
 }
 
-// Helper to format duration
+// Helper to format duration with bug fix (rounding)
 function formatDuration(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
+  const rounded = Math.round(seconds);
+  const mins = Math.floor(rounded / 60);
+  const secs = rounded % 60;
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function History({ onClose }: HistoryProps) {
+function calculateStdDev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const squareDiffs = values.map(v => Math.pow(v - avg, 2));
+  const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / values.length;
+  return Math.sqrt(avgSquareDiff);
+}
+
+// Helper to safely extract duration
+function getSessionDuration(session: any): number {
+  if (typeof session.durationSeconds === 'number' && session.durationSeconds > 0) {
+    return session.durationSeconds;
+  }
+  
+  // Check fullAnalysisJson
+  if (session.fullAnalysisJson) {
+      try {
+        const analysis = typeof session.fullAnalysisJson === 'string' 
+            ? JSON.parse(session.fullAnalysisJson) 
+            : session.fullAnalysisJson;
+            
+        if (analysis?.speechStats?.duration) {
+             const d = analysis.speechStats.duration; // "MM:SS"
+             if (typeof d === 'string' && d.includes(':')) {
+                 const [m, s] = d.split(':').map(Number);
+                 return (m * 60) + s;
+             }
+        }
+      } catch (e) {
+        // ignore parse error
+      }
+  }
+  
+  // Fallback to older string field
+  if (typeof session.duration === 'string' && session.duration.includes(':')) {
+       const [m, s] = session.duration.split(':').map(Number);
+       return (m * 60) + s;
+  }
+
+  return 0;
+}
+
+function History({ onClose, onSelectSession }: HistoryProps) {
   // ===========================================
   // DATA FETCHING
   // ===========================================
 
   const { isLoading, error, data } = db.useQuery({ sessions: {} });
 
-  // Track which session is expanded
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
   // ===========================================
-  // HANDLERS
+  // DATA PROCESSING & METRICS
   // ===========================================
 
-  const toggleExpand = (id: string) => {
-    setExpandedId(expandedId === id ? null : id);
-  };
+  const sessions = useMemo(() => {
+    return data?.sessions 
+      ? [...data.sessions].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+      : [];
+  }, [data]);
 
-  // ===========================================
-  // DATA PROCESSING
-  // ===========================================
+  const sessionsForList = useMemo(() => [...sessions].reverse(), [sessions]);
 
-  // Sort sessions by date (oldest first for graph)
-  const sessions = data?.sessions 
-    ? [...data.sessions].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-    : [];
-
-  // Sessions for display (newest first)
-  const sessionsForList = [...sessions].reverse();
-
-  // Helper to calculate average score for a session
+  // Helper: Get Avg Score
   const getSessionAvgScore = (session: any): number => {
-    // Priority 1: Use explicit overallScore if available
-    if (session.overallScore !== undefined) {
-      return Number(session.overallScore);
+    if (session.overallScore !== undefined) return Number(session.overallScore);
+    // Fallback logic
+    if (session.contentScore !== undefined && session.deliveryScore !== undefined && session.languageScore !== undefined) {
+      return Number(((session.contentScore * 0.4) + (session.deliveryScore * 0.3) + (session.languageScore * 0.15) + (session.bodyLanguageScore || 0) * 0.15).toFixed(1));
     }
-    
-    // Priority 2: Calculate from new breakdown if available
-    if (session.contentScore !== undefined && 
-        session.deliveryScore !== undefined && 
-        session.languageScore !== undefined && 
-        session.bodyLanguageScore !== undefined) {
-      return Number(((
-        (session.contentScore * 0.40) + 
-        (session.deliveryScore * 0.30) + 
-        (session.languageScore * 0.15) + 
-        (session.bodyLanguageScore * 0.15)
-      )).toFixed(1));
-    }
-
-    // Priority 3: Fallback to old breakdown
-    if (session.structureScore !== undefined && 
-        session.contentScore !== undefined && 
-        session.deliveryScore !== undefined) {
-      return Number(((
-        (session.structureScore as number) + 
-        (session.contentScore as number) + 
-        (session.deliveryScore as number)
-      ) / 3).toFixed(1));
-    }
-    
     return 0;
   };
 
-  // Calculate stats
+  // 1. Calculate Aggregates
   const totalSessions = sessions.length;
-  const averageScore = totalSessions > 0 
-    ? sessions.reduce((sum, s) => sum + getSessionAvgScore(s), 0) / totalSessions
+  const scores = sessions.map(getSessionAvgScore);
+  const averageScore = totalSessions > 0 ? scores.reduce((a, b) => a + b, 0) / totalSessions : 0;
+  
+  // 2. Metric: Consistency (Based on Std Dev)
+  const stdDev = calculateStdDev(scores);
+  const consistencyScore = Math.max(0, Math.min(100, Math.round(100 - (stdDev * 20)))); 
+  let consistencyLabel = "LOW";
+  let consistencyColor = "#dc2626"; // red
+  if (consistencyScore >= 85) { consistencyLabel = "HIGH"; consistencyColor = "#059669"; } // green
+  else if (consistencyScore >= 70) { consistencyLabel = "MED-HIGH"; consistencyColor = "#059669"; }
+  else if (consistencyScore >= 55) { consistencyLabel = "MEDIUM"; consistencyColor = "#d97706"; } // yellow
+  else if (isNaN(consistencyScore)) { consistencyScore = 0; consistencyLabel = "-"; consistencyColor = "#9ca3af"; }
+
+  // 3. Metric: Avg Duration
+  const avgDurationSecs = totalSessions > 0 
+    ? sessions.reduce((sum, s) => sum + (getSessionDuration(s) || 0), 0) / totalSessions 
     : 0;
+  const isDurationShort = avgDurationSecs < 180;
 
-  // Calculate score trend
-  const getScoreTrend = (): { trend: string; positive: boolean } => {
-    if (sessions.length < 2) return { trend: 'N/A', positive: true };
-    
-    const recentSessions = sessions.slice(-5);
-    const olderSessions = sessions.slice(0, Math.max(1, sessions.length - 5));
-    
-    const recentAvg = recentSessions.reduce((sum, s) => sum + getSessionAvgScore(s), 0) / recentSessions.length;
-    const olderAvg = olderSessions.reduce((sum, s) => sum + getSessionAvgScore(s), 0) / olderSessions.length;
-    
-    const diff = recentAvg - olderAvg;
-    const positive = diff >= 0;
-    return { trend: `${positive ? '+' : ''}${diff.toFixed(1)}`, positive };
-  };
+  // 4. Metric: Training Frequency
+  const firstSessionTime = sessions.length > 0 ? sessions[0].createdAt : Date.now();
+  const weeksActive = Math.max(1, (Date.now() - firstSessionTime) / (1000 * 60 * 60 * 24 * 7));
+  const sessionsPerWeek = totalSessions / weeksActive;
+  let freqLabel = "LOW";
+  let freqColor = "#dc2626";
+  if (sessionsPerWeek >= 4) { freqLabel = "EXCELLENT"; freqColor = "#059669"; }
+  else if (sessionsPerWeek >= 2.5) { freqLabel = "GOOD"; freqColor = "#059669"; }
+  else if (sessionsPerWeek >= 1.0) { freqLabel = "FAIR"; freqColor = "#d97706"; }
 
-  const scoreTrend = getScoreTrend();
+  // 5. Metric: Avg Pace
+  const avgWpm = totalSessions > 0
+    ? sessions.reduce((sum, s) => sum + (s.wpm || s.wordsPerMinute || 0), 0) / totalSessions
+    : 0;
+  const isPaceBad = avgWpm < 120 || avgWpm > 180;
 
-  // ===========================================
-  // LINE GRAPH COMPONENT (Large, Fixed)
-  // ===========================================
+  // 6. Metric: Filler Words / Min
+  const avgFillersPerMin = totalSessions > 0
+    ? sessions.reduce((sum, s) => {
+        const durMin = Math.max(0.5, (getSessionDuration(s) || 0) / 60);
+        return sum + ((s.fillerCount || 0) / durMin);
+      }, 0) / totalSessions
+    : 0;
+  const isFillersGood = avgFillersPerMin < 5;
 
-  const renderLineGraph = () => {
-    if (sessions.length < 2) {
-      return (
-        <div style={styles.graphPlaceholder}>
-          <div style={styles.graphPlaceholderIcon}>📊</div>
-          <p style={styles.graphPlaceholderText}>
-            Complete at least 2 sessions to see your progress graph
-          </p>
-        </div>
-      );
-    }
+  // 7. Metric: Structure Score (Content Avg)
+  const avgContentScore = totalSessions > 0
+    ? sessions.reduce((sum, s) => sum + (s.contentScore || 0), 0) / totalSessions
+    : 0;
+  const isStructureWeak = avgContentScore < 6.0;
 
-    const scores = sessions.map(s => getSessionAvgScore(s));
-    const maxScore = 10;
-    const minScore = 0;
-    const graphWidth = 100;
-    const graphHeight = 60;
-    const padding = { left: 8, right: 4, top: 6, bottom: 10 };
-    const plotWidth = graphWidth - padding.left - padding.right;
-    const plotHeight = graphHeight - padding.top - padding.bottom;
+  // Tournament Readiness Logic
+  let tierName = "LOCAL ROUND";
+  let tierColor = "#9ca3af"; // Gray
+  let tierGradient = "linear-gradient(135deg, #f3f4f6 0%, #ffffff 100%)";
+  let tierTextColor = "#374151";
 
-    // Generate points for the line
-    const points = scores.map((score, index) => {
-      const x = padding.left + (index / (scores.length - 1)) * plotWidth;
-      const y = padding.top + plotHeight - ((score - minScore) / (maxScore - minScore)) * plotHeight;
-      return { x, y, score };
+  let nextTier = "Quarterfinals";
+  let nextThreshold = "4.0";
+  let recommendations = [
+    "Improve argument structure",
+    "Increase speech length to 5+ minutes",
+    "Practice 3-4 per week"
+  ];
+
+  if (averageScore >= 8.0) {
+    tierName = "FINALS";
+    tierColor = "#059669"; // Green
+    tierGradient = "linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%)";
+    tierTextColor = "#065f46";
+    nextTier = ""; // Reached top
+    recommendations = [
+      "Maintain excellence",
+      "Maintain consistency",
+      "Continue weekly practice",
+      "Focus on advanced techniques"
+    ];
+  } else if (averageScore >= 6.0) {
+    tierName = "SEMIFINALS";
+    tierColor = "#2563eb"; // Blue
+    tierGradient = "linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)";
+    tierTextColor = "#1e40af";
+    nextTier = "Finals";
+    nextThreshold = "8.0";
+    recommendations = [
+      "Refine vocal delivery and pacing",
+      "Strengthen evidence and examples",
+      "Practice 2-3 per week"
+    ];
+  } else if (averageScore >= 4.0) {
+    tierName = "QUARTERFINALS";
+    tierColor = "#ca8a04"; // Yellow/Dark Gold
+    tierGradient = "linear-gradient(135deg, #fefce8 0%, #ffffff 100%)";
+    tierTextColor = "#854d0e";
+    nextTier = "Semifinals";
+    nextThreshold = "6.0";
+  }
+
+  // Priority Improvements Logic (Detailed Aggregation)
+  const priorityList = useMemo(() => {
+    const counts: Record<string, { count: number; impact: string; action: string; originalTitle: string }> = {};
+
+    sessions.forEach(s => {
+      const analysis = s.fullAnalysisJson;
+      if (analysis?.priorityImprovements) {
+        analysis.priorityImprovements.forEach((pi: any) => {
+          // Normalize issue text to group similar ones
+          const title = pi.issue; 
+          if (title) {
+             const key = title.toLowerCase().trim();
+             if (!counts[key]) {
+               counts[key] = { 
+                 count: 0, 
+                 impact: pi.impact || "No description available.", 
+                 action: pi.action || "No specific drill.", 
+                 originalTitle: title 
+               };
+             }
+             counts[key].count++;
+          }
+        });
+      }
     });
 
-    // Create SVG path
-    const pathD = points
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
-      .join(' ');
+    // Convert to array and sort by frequency
+    const sorted = Object.values(counts)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3); // Top 3
 
-    // Create area path
-    const areaD = `${pathD} L ${points[points.length - 1].x} ${padding.top + plotHeight} L ${padding.left} ${padding.top + plotHeight} Z`;
+    // Fallback logic if too few specific issues found
+    if (sorted.length < 3 && totalSessions > 0) {
+      if (avgContentScore < 6.0 && !sorted.some(i => i.originalTitle === "Improve argument structure")) {
+        sorted.push({
+          count: 0,
+          impact: "Content score is below average. Structure needs reinforcement.",
+          action: "Use the 'State, Explain, Support' framework for every point.",
+          originalTitle: "Improve argument structure"
+        });
+      }
+      if (avgWpm < 120 && !sorted.some(i => i.originalTitle === "Increase speaking pace")) {
+        sorted.push({
+          count: 0,
+          impact: "Speaking rate is too slow for competitive standard.",
+          action: "Practice speaking with a metronome at 130bpm.",
+          originalTitle: "Increase speaking pace"
+        });
+      }
+      if (avgFillersPerMin > 5 && !sorted.some(i => i.originalTitle === "Reduce filler words")) {
+        sorted.push({
+          count: 0,
+          impact: "High frequency of filler words detracts from authority.",
+          action: "Pause silently instead of using 'um' or 'uh'.",
+          originalTitle: "Reduce filler words"
+        });
+      }
+    }
 
+    return sorted.slice(0, 3);
+  }, [sessions, avgContentScore, avgWpm, avgFillersPerMin, totalSessions]);
+
+
+  // Chart Data Preparation
+  const chartData = sessions.map((s, i) => ({
+    session: i + 1,
+    score: getSessionAvgScore(s),
+  }));
+
+  const improvementSinceStart = scores.length > 1 ? scores[scores.length - 1] - scores[0] : 0;
+  const improvementSign = improvementSinceStart > 0 ? '+' : '';
+  const improvementColor = improvementSinceStart > 0 ? '#059669' : improvementSinceStart < 0 ? '#dc2626' : '#6b7280';
+
+  // ===========================================
+  // RENDER HELPERS
+  // ===========================================
+  
+  const MetricCard = ({ label, value, statusLabel, statusColor }: any) => (
+    <div className="metric-card" style={styles.metricCard}>
+      <div style={styles.metricLabel}>{label}</div>
+      <div style={styles.metricValue}>{value}</div>
+      {statusLabel && (
+        <div style={{ ...styles.metricStatus, color: statusColor }}>
+          {statusLabel}
+        </div>
+      )}
+    </div>
+  );
+
+  // Loading Skeleton
+  if (isLoading) {
     return (
-      <div style={styles.graphWrapper}>
-        <h3 style={styles.graphTitle}>📈 Score Progress</h3>
-        <svg 
-          viewBox={`0 0 ${graphWidth} ${graphHeight}`}
-          style={styles.graphSvg}
-          preserveAspectRatio="xMidYMid meet"
-        >
-          {/* Gradient definition */}
-          <defs>
-            <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#059669" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="#059669" stopOpacity="0.05" />
-            </linearGradient>
-          </defs>
-
-          {/* Grid lines */}
-          {[0, 5, 10].map((val) => {
-            const y = padding.top + plotHeight - (val / maxScore) * plotHeight;
-            return (
-              <g key={val}>
-                <line
-                  x1={padding.left}
-                  y1={y}
-                  x2={padding.left + plotWidth}
-                  y2={y}
-                  stroke="#e5e5e5"
-                  strokeWidth="0.3"
-                  strokeDasharray="1,1"
-                />
-                <text
-                  x={padding.left - 1}
-                  y={y + 0.8}
-                  fill="#999999"
-                  fontSize="2.5"
-                  textAnchor="end"
-                  dominantBaseline="middle"
-                >
-                  {val}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Area fill */}
-          <path
-            d={areaD}
-            fill="url(#areaGradient)"
-          />
-
-          {/* Main line */}
-          <path
-            d={pathD}
-            fill="none"
-            stroke="#059669"
-            strokeWidth="1"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Data points */}
-          {points.map((point, index) => (
-            <g key={index}>
-              <circle
-                cx={point.x}
-                cy={point.y}
-                r="1.5"
-                fill="#ffffff"
-                stroke="#059669"
-                strokeWidth="0.8"
-              />
-              {/* Score label on hover area */}
-              <text
-                x={point.x}
-                y={point.y - 2.5}
-                fill="#059669"
-                fontSize="2"
-                textAnchor="middle"
-                fontWeight="600"
-              >
-                {point.score}
-              </text>
-            </g>
+      <div className="history-page" style={styles.container}>
+        <div style={{marginBottom: 20}}>
+          <div className="skeleton-pulse" style={{height: 40, width: '40%', background: '#e5e7eb', margin: '0 auto 8px', borderRadius: 8}}></div>
+          <div className="skeleton-pulse" style={{height: 20, width: '20%', background: '#e5e7eb', margin: '0 auto', borderRadius: 8}}></div>
+        </div>
+        
+        <div className="metrics-grid">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton-pulse" style={{height: 140, background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 12}}></div>
           ))}
+        </div>
 
-          {/* Session numbers */}
-          {points.map((point, index) => (
-            <text
-              key={index}
-              x={point.x}
-              y={graphHeight - 2}
-              fill="#999999"
-              fontSize="2"
-              textAnchor="middle"
-            >
-              {index + 1}
-            </text>
-          ))}
-        </svg>
-        <div style={styles.graphLegend}>
-          <span style={styles.graphLegendText}>Session #</span>
+        <div className="skeleton-pulse" style={{height: 200, background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 16, marginBottom: 8}}></div>
+        <div className="skeleton-pulse" style={{height: 400, background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 16, marginBottom: 8}}></div>
+        
+        <div className="bottom-section">
+           <div className="left-column skeleton-pulse" style={{height: 300, background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 12}}></div>
+           <div className="right-column skeleton-pulse" style={{height: 500, background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 12}}></div>
+        </div>
+
+        <style>{`
+           .history-page { padding: 6px; max-width: 1280px; margin: 0 auto; }
+           .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+           @media (max-width: 1024px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+           .bottom-section { display: flex; gap: 8px; }
+           @media (max-width: 768px) { .bottom-section { flex-direction: column; } .left-column, .right-column { width: 100%; } }
+           .left-column { width: 40%; }
+           .right-column { width: 60%; }
+           .skeleton-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+           @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        `}</style>
+      </div>
+    );
+  }
+
+  // Error State
+  if (error) {
+    return (
+      <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif'}}>
+        <h2 style={{color: '#dc2626', marginBottom: 8}}>Failed to load history</h2>
+        <p style={{color: '#6b7280', marginBottom: 24}}>There was a problem connecting to the database.</p>
+        <div style={{display: 'flex', gap: 12}}>
+            <button onClick={() => window.location.reload()} style={{...styles.backButton, background: '#000', color: '#fff', padding: '8px 16px', borderRadius: 6}}>Retry</button>
+            <button onClick={onClose} style={{...styles.backButton, border: '1px solid #e5e7eb', padding: '8px 16px', borderRadius: 6}}>Back</button>
         </div>
       </div>
     );
-  };
+  }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} className="history-page">
       {/* Header */}
       <div style={styles.header}>
-        <button onClick={onClose} style={styles.backButton}>
-          ← Back
-        </button>
-        <h1 style={styles.title}>History / Progress</h1>
-        <p style={styles.subtitle}>Track your speech practice journey</p>
+        <div style={styles.headerTopRow}>
+           <button onClick={onClose} style={styles.backButton} className="hover-link">← Back to Dashboard</button>
+        </div>
+        <h1 style={styles.title}>Performance History</h1>
+        <p style={styles.subtitle}>Detailed analysis of your competitive progress</p>
       </div>
 
-      {/* Main Layout: Two columns */}
-      <div style={styles.mainLayout}>
-        {/* Left Column: Sessions List */}
-        <div style={styles.leftColumn}>
-          {/* Stats Summary */}
-          {totalSessions > 0 && (
-            <div style={styles.statsBox}>
-              <div style={styles.statItem}>
-                <span style={styles.statValue}>{totalSessions}</span>
-                <span style={styles.statLabel}>Sessions</span>
-              </div>
-              <div style={styles.statItem}>
-                <span style={{ ...styles.statValue, color: getScoreColor(averageScore) }}>
-                  {averageScore.toFixed(1)}
-                </span>
-                <span style={styles.statLabel}>Avg Score</span>
-              </div>
-              <div style={styles.statItem}>
-                <span style={{ 
-                  ...styles.statValue, 
-                  color: scoreTrend.positive ? '#059669' : '#dc2626' 
-                }}>
-                  {scoreTrend.trend}
-                </span>
-                <span style={styles.statLabel}>Trend</span>
-              </div>
-            </div>
-          )}
+      {/* TOP SECTION: METRICS GRID */}
+      <div className="metrics-grid">
+        <MetricCard 
+          label="CONSISTENCY" 
+          value={`${consistencyScore}%`} 
+          statusLabel={consistencyLabel}
+          statusColor={consistencyColor}
+        />
+        <MetricCard 
+          label="AVG DURATION" 
+          value={formatDuration(avgDurationSecs)}
+          statusLabel={isDurationShort ? "TOO SHORT" : "OPTIMAL"}
+          statusColor={isDurationShort ? "#dc2626" : "#059669"}
+        />
+        <MetricCard 
+          label="TRAINING FREQ" 
+          value={`${sessionsPerWeek.toFixed(1)}/wk`}
+          statusLabel={freqLabel}
+          statusColor={freqColor}
+        />
+        <MetricCard 
+          label="AVG PACE" 
+          value={`${Math.round(avgWpm)} WPM`}
+          statusLabel={isPaceBad ? (avgWpm < 120 ? "TOO SLOW" : "TOO FAST") : "OPTIMAL"}
+          statusColor={isPaceBad ? "#ca8a04" : "#059669"}
+        />
+        <MetricCard 
+          label="FILLER WORDS" 
+          value={`${avgFillersPerMin.toFixed(1)}/min`}
+          statusLabel={isFillersGood ? "GOOD" : "NEEDS WORK"}
+          statusColor={isFillersGood ? "#059669" : "#ca8a04"}
+        />
+        <MetricCard 
+          label="STRUCTURE SCORE" 
+          value={avgContentScore.toFixed(1)}
+          statusLabel={isStructureWeak ? "WEAK" : "SOLID"}
+          statusColor={isStructureWeak ? "#ca8a04" : "#059669"}
+        />
+      </div>
 
-          {/* Loading state */}
-          {isLoading && (
-            <div style={styles.loadingBox}>
-              <div style={styles.spinner} />
-              <p>Loading your sessions...</p>
+      {/* TOURNAMENT READINESS CARD (SLEEK VERSION) */}
+      <div className="readiness-card major-section" style={{...styles.readinessCard, background: tierGradient}}>
+         <div style={styles.readinessContent}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20}}>
+               <div>
+                  <div style={{fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.1em', color: tierTextColor, marginBottom: 4}}>CURRENT TIER</div>
+                  <div style={{fontSize: '2rem', fontWeight: 800, color: '#111827', lineHeight: 1}}>{tierName}</div>
+                  <div style={{fontSize: '0.9rem', color: '#6b7280', marginTop: 4}}>Based on {totalSessions} session average</div>
+               </div>
+               <div style={{textAlign: 'right'}}>
+                  <div style={{fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.1em', color: '#9ca3af', marginBottom: 4}}>AVERAGE SCORE</div>
+                  <div style={{fontSize: '3rem', fontWeight: 800, color: '#111827', lineHeight: 0.9}}>{averageScore.toFixed(1)}</div>
+               </div>
             </div>
-          )}
 
-          {/* Error state */}
-          {error && (
-            <div style={styles.errorBox}>
-              Error loading sessions: {error.message}
-            </div>
-          )}
-
-          {/* Empty state */}
-          {!isLoading && !error && sessions.length === 0 && (
-            <div style={styles.emptyBox}>
-              <h3 style={styles.emptyTitle}>No sessions yet</h3>
-              <p style={styles.emptyText}>
-                Complete a practice session to see your history here.
-              </p>
-            </div>
-          )}
-
-          {/* Sessions list */}
-          {!isLoading && sessionsForList.length > 0 && (
-            <div style={styles.sessionsList}>
-              <h3 style={styles.sessionsListTitle}>All Sessions</h3>
-              {sessionsForList.map((session: any, index) => (
-                <div key={session.id} style={styles.sessionCard}>
-                  {/* Session header */}
-                  <div 
-                    style={styles.sessionHeader}
-                    onClick={() => toggleExpand(session.id)}
-                  >
-                    <div style={styles.sessionLeft}>
-                      <div 
-                        style={{
-                          ...styles.scoreCircle,
-                          borderColor: getScoreColor(getSessionAvgScore(session)),
-                        }}
-                      >
-                        <span style={{ color: getScoreColor(getSessionAvgScore(session)) }}>
-                          {getSessionAvgScore(session)}
-                        </span>
+            <div style={{display: 'flex', gap: 24, flexWrap: 'wrap'}}>
+               <div style={{flex: 1, minWidth: '280px'}}>
+                  {averageScore < 8.0 ? (
+                    <div style={{marginBottom: 16}}>
+                      <div style={{fontSize: '0.9rem', fontWeight: 700, color: '#374151', marginBottom: 4}}>PATH TO {nextTier.toUpperCase()}</div>
+                      <div style={{height: 8, background: 'rgba(0,0,0,0.05)', borderRadius: 4, overflow: 'hidden', marginBottom: 8}}>
+                         <div style={{height: '100%', width: `${(averageScore / 10) * 100}%`, background: tierColor}}></div>
                       </div>
-                      <div style={styles.sessionInfo}>
-                        <div style={styles.sessionThemeRow}>
-                          <span style={styles.sessionTheme}>{session.theme || 'Unknown Theme'}</span>
-                          <span style={styles.sessionNumber}>#{sessionsForList.length - index}</span>
-                        </div>
-                        <div style={styles.sessionMeta}>
-                          <span style={styles.sessionDate}>
-                            {session.createdAt ? formatDate(session.createdAt) : 'Unknown date'}
-                          </span>
-                          {session.wordsPerMinute !== undefined && (
-                            <span style={styles.sessionWpm}>
-                              {session.wordsPerMinute} WPM
-                            </span>
-                          )}
-                          {session.durationSeconds !== undefined && (
-                            <span style={styles.sessionDuration}>
-                              {formatDuration(session.durationSeconds as number)}
-                            </span>
-                          )}
-                        </div>
+                      <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#6b7280'}}>
+                         <span>Current: {averageScore.toFixed(1)}</span>
+                         <span>Target: {nextThreshold}+</span>
+                         <span style={{color: '#2563eb', fontWeight: 600}}>Gap: {(Number(nextThreshold) - averageScore).toFixed(1)}</span>
                       </div>
                     </div>
-                    <span style={styles.expandIcon}>
-                      {expandedId === session.id ? '−' : '+'}
-                    </span>
-                  </div>
-
-                  {/* Expanded details */}
-                  {expandedId === session.id && (
-                    <div style={styles.sessionDetails}>
-                      {/* Quote */}
-                      <div style={styles.detailSection}>
-                        <span style={styles.detailLabel}>Quote:</span>
-                        <span style={styles.detailQuote}>"{session.quote}"</span>
-                      </div>
-
-                      {/* Score breakdown */}
-                      {(session.structureScore !== undefined || session.overallScore !== undefined) && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Detailed Scores:</span>
-                          <div style={styles.scoresGrid}>
-                            {session.overallScore !== undefined && (
-                              <div style={{ ...styles.scoreBox, border: '1px solid #000' }}>
-                                <span style={styles.scoreBoxValue}>{Number(session.overallScore).toFixed(1)}</span>
-                                <span style={styles.scoreBoxLabel}>Overall</span>
-                              </div>
-                            )}
-                            {session.contentScore !== undefined && (
-                              <div style={styles.scoreBox}>
-                                <span style={styles.scoreBoxValue}>{session.contentScore}</span>
-                                <span style={styles.scoreBoxLabel}>Content (40%)</span>
-                              </div>
-                            )}
-                            {session.deliveryScore !== undefined && (
-                              <div style={styles.scoreBox}>
-                                <span style={styles.scoreBoxValue}>{session.deliveryScore}</span>
-                                <span style={styles.scoreBoxLabel}>Delivery (30%)</span>
-                              </div>
-                            )}
-                            {session.languageScore !== undefined && (
-                              <div style={styles.scoreBox}>
-                                <span style={styles.scoreBoxValue}>{session.languageScore}</span>
-                                <span style={styles.scoreBoxLabel}>Language (15%)</span>
-                              </div>
-                            )}
-                            {session.bodyLanguageScore !== undefined && (
-                              <div style={styles.scoreBox}>
-                                <span style={styles.scoreBoxValue}>{session.bodyLanguageScore}</span>
-                                <span style={styles.scoreBoxLabel}>Body (15%)</span>
-                              </div>
-                            )}
-                            {session.structureScore !== undefined && !session.contentScore && (
-                              <div style={styles.scoreBox}>
-                                <span style={styles.scoreBoxValue}>{session.structureScore}</span>
-                                <span style={styles.scoreBoxLabel}>Structure (Old)</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Performance Tier */}
-                      {session.performanceTier && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Performance Tier:</span>
-                          <span style={{ 
-                            ...styles.detailText, 
-                            fontWeight: 700, 
-                            color: '#000000',
-                            background: '#f0f0f0',
-                            padding: '4px 8px',
-                            borderRadius: '4px'
-                          }}>
-                            {session.performanceTier}
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Speech Stats */}
-                      {(session.wordCount || session.wordsPerMinute || session.durationSeconds || session.fillerCount) && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Speech Stats:</span>
-                          <div style={styles.statsRow}>
-                            {session.durationSeconds !== undefined && (
-                              <span style={styles.statBadge}>⏱️ {formatDuration(session.durationSeconds as number)}</span>
-                            )}
-                            {session.wordCount !== undefined && (
-                              <span style={styles.statBadge}>📝 {session.wordCount} words</span>
-                            )}
-                            {session.wordsPerMinute !== undefined && (
-                              <span style={styles.statBadge}>🎯 {session.wordsPerMinute} WPM</span>
-                            )}
-                            {session.fillerCount !== undefined && (
-                              <span style={styles.statBadge}>💬 {session.fillerCount} fillers</span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Content Summary */}
-                      {session.contentSummary && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Content Summary:</span>
-                          <p style={styles.detailSummary}>{session.contentSummary}</p>
-                        </div>
-                      )}
-
-                      {/* Practice Drill */}
-                      {session.practiceDrill && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Practice Drill:</span>
-                          <p style={styles.detailDrill}>{session.practiceDrill}</p>
-                        </div>
-                      )}
-
-                      {/* Legacy Summary */}
-                      {session.summary && !session.contentSummary && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Summary:</span>
-                          <p style={styles.detailText}>{session.summary}</p>
-                        </div>
-                      )}
-
-                      {/* Strengths */}
-                      {session.strengths && (session.strengths as string[]).length > 0 && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>✓ Strengths:</span>
-                          <ul style={styles.detailList}>
-                            {(session.strengths as string[]).map((s, i) => (
-                              <li key={i} style={styles.strengthItem}>{s}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-
-                      {/* Areas to improve */}
-                      {((session.areasForImprovement && (session.areasForImprovement as string[]).length > 0) ||
-                        (session.improvements && (session.improvements as string[]).length > 0)) && (
-                        <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>↑ Areas to Improve:</span>
-                          <ul style={styles.detailList}>
-                            {((session.improvements || session.areasForImprovement) as string[]).map((a, i) => (
-                              <li key={i} style={styles.improveItem}>{a}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                  ) : (
+                    <div style={{color: '#059669', fontWeight: 700, fontSize: '1.1rem', marginBottom: 16}}>
+                       🏆 You are at the top of your game!
                     </div>
                   )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+               </div>
 
-        {/* Right Column: Fixed Graph */}
-        <div style={styles.rightColumn}>
-          <div style={styles.graphContainer}>
-            {renderLineGraph()}
-          </div>
+               <div style={{flex: 1.2, minWidth: '280px', background: 'rgba(255,255,255,0.6)', borderRadius: 8, padding: 16, border: '1px solid rgba(0,0,0,0.05)'}}>
+                  <div style={{fontSize: '0.75rem', fontWeight: 800, color: '#9ca3af', letterSpacing: '0.05em', marginBottom: 12, textTransform: 'uppercase'}}>Recommended Focus</div>
+                  <ul style={{margin: 0, padding: 0, listStyle: 'none', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px'}}>
+                    {recommendations.map((rec, i) => (
+                      <li key={i} style={{fontSize: '0.9rem', color: '#4b5563', display: 'flex', alignItems: 'flex-start', gap: 6}}>
+                         <span style={{color: tierColor, fontWeight: 'bold'}}>•</span> {rec}
+                      </li>
+                    ))}
+                  </ul>
+               </div>
+            </div>
+         </div>
+      </div>
+
+      {/* PERFORMANCE TRENDS CHART */}
+      <div style={styles.chartCard} className="chart-card major-section">
+        <div style={styles.chartTitle}>PERFORMANCE TRENDS</div>
+        <div style={styles.chartContainer}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+              <XAxis 
+                dataKey="session" 
+                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                tickLine={false}
+                axisLine={{ stroke: '#e5e7eb' }}
+                label={{ value: 'Session #', position: 'insideBottom', offset: -5, fontSize: 12, fill: '#9ca3af' }}
+                dy={10}
+              />
+              <YAxis 
+                domain={[0, 10]}
+                ticks={[0, 2, 4, 6, 8, 10]}
+                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                tickLine={false}
+                axisLine={{ stroke: '#e5e7eb' }}
+                label={{ value: 'Score', angle: -90, position: 'insideLeft', fontSize: 12, fill: '#9ca3af' }}
+              />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#fff', 
+                  border: '1px solid #e5e7eb', 
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                  fontSize: '14px'
+                }}
+                itemStyle={{ color: '#111827', fontWeight: 600 }}
+                labelStyle={{ color: '#6b7280', marginBottom: '4px' }}
+                formatter={(value: any) => [`${Number(value)}`, 'Overall Score']}
+                labelFormatter={(label) => `Session ${label}`}
+              />
+              <Line 
+                type="monotone" 
+                dataKey="score" 
+                stroke="#000000" 
+                strokeWidth={2.5}
+                dot={{ r: 5, fill: '#000000', strokeWidth: 0 }}
+                activeDot={{ r: 7, fill: '#000000', strokeWidth: 0 }}
+                isAnimationActive={true}
+              />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
+
+      {/* BOTTOM SECTION: 2-COL LAYOUT */}
+      <div className="bottom-section">
+        
+        {/* Left Column (40%): Sticky Improvements & Progress */}
+        <div className="left-column sticky-column">
+          
+          {/* Priority Improvements */}
+          <h3 style={styles.sectionTitle}>PRIORITY IMPROVEMENTS</h3>
+          <div style={{...styles.priorityCard, marginBottom: 16}}>
+             <div style={styles.priorityList}>
+              {priorityList.map((item, i) => (
+                <div 
+                  key={i} 
+                  style={{
+                    ...styles.priorityItem,
+                    borderBottom: i === priorityList.length - 1 ? 'none' : '1px solid #f3f4f6',
+                    paddingBottom: i === priorityList.length - 1 ? 0 : '16px',
+                    marginBottom: i === priorityList.length - 1 ? 0 : '16px'
+                  }}
+                >
+                  <div style={styles.priorityHeader}>
+                     <span style={styles.priorityRank}>#{i + 1}</span>
+                     <span style={styles.priorityTitle}>{item.originalTitle}</span>
+                     {item.count > 0 && (
+                       <span style={styles.priorityFrequency}>(in {item.count} sessions)</span>
+                     )}
+                  </div>
+                  <div style={styles.priorityDescription}>{item.impact}</div>
+                  <div style={styles.priorityAction}>
+                     <span style={{fontWeight: 500}}>Drill:</span> {item.action}
+                  </div>
+                </div>
+              ))}
+              {priorityList.length === 0 && (
+                <div style={styles.emptyState}>No recurring issues detected.</div>
+              )}
+             </div>
+          </div>
+
+          {/* New Progress Stats Card */}
+          <h3 style={styles.sectionTitle}>PROGRESS SNAPSHOT</h3>
+          <div style={styles.progressCard}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid #f3f4f6', paddingBottom: 16}}>
+                 <span style={{fontSize: '0.85rem', fontWeight: 700, color: '#6b7280'}}>TOTAL IMPROVEMENT</span>
+                 <span style={{fontSize: '1.5rem', fontWeight: 800, color: improvementColor}}>
+                    {improvementSign}{improvementSinceStart.toFixed(1)}
+                 </span>
+              </div>
+              <div style={{display: 'flex', justifyContent: 'space-between', gap: 12}}>
+                 <div>
+                    <div style={{fontSize: '0.75rem', color: '#9ca3af', marginBottom: 2}}>STARTING SCORE</div>
+                    <div style={{fontSize: '1.25rem', fontWeight: 700, color: '#374151'}}>{scores.length > 0 ? scores[0].toFixed(1) : '-'}</div>
+                 </div>
+                 <div style={{color: '#d1d5db', fontSize: '1.25rem'}}>→</div>
+                 <div style={{textAlign: 'right'}}>
+                    <div style={{fontSize: '0.75rem', color: '#9ca3af', marginBottom: 2}}>CURRENT AVG</div>
+                    <div style={{fontSize: '1.25rem', fontWeight: 700, color: '#111827'}}>{averageScore.toFixed(1)}</div>
+                 </div>
+              </div>
+          </div>
+
+        </div>
+
+        {/* Right Column (60%): Recent Rounds */}
+        <div className="right-column">
+          <h3 style={styles.sectionTitle}>RECENT ROUNDS</h3>
+          
+          {sessionsForList.length > 0 ? (
+            <div style={styles.sessionsList} className="sessions-list">
+              {sessionsForList.map((session: any) => {
+                const score = getSessionAvgScore(session);
+                const scoreColor = score >= 6.0 ? '#059669' : score >= 4.0 ? '#ca8a04' : '#dc2626';
+                const dateStr = formatDate(session.createdAt);
+                
+                // Stats
+                const wpm = session.wpm || session.wordsPerMinute || 0;
+                const duration = getSessionDuration(session);
+                
+                // Warnings
+                const warnings = [];
+                if (duration < 180 && duration > 0) warnings.push("Too short");
+                if (score < 4.0) warnings.push("Low performance");
+
+                return (
+                  <div 
+                    key={session.id} 
+                    style={styles.roundCard}
+                    onClick={() => onSelectSession && onSelectSession(session)}
+                    className="round-card"
+                  >
+                    <div style={styles.roundCardContent}>
+                      {/* Left Side: Score & Meta */}
+                      <div style={styles.roundLeft}>
+                        <div style={{ ...styles.roundScore, color: scoreColor }}>{score}</div>
+                        <div style={styles.roundMeta}>
+                          <div style={styles.roundTheme}>{session.theme || 'Unknown Theme'}</div>
+                          <div style={styles.roundDate}>{dateStr}</div>
+                        </div>
+                      </div>
+
+                      {/* Right Side: Arrow */}
+                      <div style={styles.roundArrow} className="round-arrow">
+                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                           <line x1="5" y1="12" x2="19" y2="12"></line>
+                           <polyline points="12 5 19 12 12 19"></polyline>
+                         </svg>
+                      </div>
+                    </div>
+
+                    {/* Below Header: Stats */}
+                    <div style={styles.roundStats}>
+                       <span>{Math.round(wpm)} WPM</span>
+                       <span style={styles.statSeparator}>•</span>
+                       <span>{formatDuration(duration)}</span>
+                    </div>
+
+                    {/* Category Scores */}
+                    <div style={styles.roundCats}>
+                       <span>Content {session.contentScore || '-'}</span>
+                       <span>Delivery {session.deliveryScore || '-'}</span>
+                       <span>Language {session.languageScore || '-'}</span>
+                       <span>Body {session.bodyLanguageScore || '-'}</span>
+                    </div>
+
+                    {/* Warnings */}
+                    {warnings.length > 0 && (
+                      <div style={styles.roundWarnings}>
+                         {warnings.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={styles.emptyState}>No sessions yet.</div>
+          )}
+        </div>
+      </div>
+      
+      {/* Responsive Styles Injection */}
+      <style>{`
+        /* TRANSITIONS & INTERACTION */
+        .metric-card, .round-card, button, a, .readiness-badge {
+          transition: all 200ms ease;
+        }
+        
+        .hover-link:hover {
+          color: #111827 !important;
+          text-decoration: underline;
+        }
+
+        .round-card:hover {
+           background-color: #f9fafb !important;
+           border-color: #9ca3af !important;
+        }
+        .round-card:hover .round-arrow {
+           transform: translateX(4px);
+           color: #111827 !important;
+        }
+
+        /* PAGE CONTAINER */
+        .history-page {
+          padding: 6px;
+          max-width: 1280px;
+          margin: 0 auto;
+        }
+        @media (max-width: 768px) {
+          .history-page { padding: 4px; }
+        }
+
+        /* SPACING */
+        .major-section {
+          margin-bottom: 8px; /* Strict 8px spacing */
+        }
+        .metrics-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 6px; /* Strict 6px gap */
+          margin-bottom: 8px;
+        }
+        
+        /* STICKY COLUMN */
+        .sticky-column {
+           position: sticky;
+           top: 20px;
+           height: fit-content;
+        }
+        
+        /* TABLET */
+        @media (min-width: 768px) and (max-width: 1023px) {
+          .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+          .bottom-section { gap: 6px; }
+        }
+
+        /* MOBILE */
+        @media (max-width: 768px) {
+          .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+          
+          .readiness-card { flex-direction: column; }
+          .readiness-content { padding: 16px !important; }
+          
+          .bottom-section { flex-direction: column; gap: 8px; }
+          .left-column, .right-column { width: 100% !important; }
+          
+          /* Disable sticky on mobile as columns stack */
+          .sticky-column { position: static; }
+        }
+
+        /* LAYOUT COLUMNS */
+        .bottom-section {
+           display: flex;
+           gap: 8px;
+           margin-top: 8px;
+        }
+        .left-column { width: 40%; }
+        .right-column { width: 60%; }
+      `}</style>
     </div>
   );
 }
@@ -536,348 +723,250 @@ function History({ onClose }: HistoryProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    display: 'flex',
-    flexDirection: 'column',
     minHeight: '100vh',
-    padding: '80px 48px 120px 48px',
     background: '#ffffff',
+    fontFamily: "'Segoe UI', Roboto, sans-serif",
   },
   header: {
-    marginBottom: '32px',
+    marginBottom: '24px',
+    textAlign: 'center',
+    padding: '20px 0',
+    position: 'relative',
+  },
+  headerTopRow: {
+    position: 'absolute',
+    top: '20px',
+    left: '0',
+    display: 'flex',
+    alignItems: 'center',
   },
   backButton: {
-    background: 'transparent',
-    color: '#333333',
+    background: 'none',
     border: 'none',
-    fontSize: '0.95rem',
+    color: '#6b7280',
     cursor: 'pointer',
-    padding: '0',
-    marginBottom: '16px',
+    fontSize: '0.9rem',
+    fontWeight: 500,
     display: 'inline-block',
   },
   title: {
-    color: '#111111',
-    fontSize: '2.5rem',
-    margin: '0 0 12px 0',
-    fontWeight: 700,
+    fontSize: '2rem',
+    fontWeight: 800,
+    color: '#111827',
+    margin: '0 0 4px 0',
     letterSpacing: '-0.02em',
   },
   subtitle: {
-    color: '#666666',
+    color: '#6b7280',
     fontSize: '1rem',
     margin: 0,
   },
-  mainLayout: {
-    display: 'flex',
-    gap: '48px',
-    alignItems: 'flex-start',
-  },
-  leftColumn: {
-    flex: '1',
-    maxWidth: '700px',
-  },
-  rightColumn: {
-    width: '400px',
-    flexShrink: 0,
-    position: 'sticky',
-    top: '100px',
-    alignSelf: 'flex-start',
-  },
-  graphContainer: {
-    background: '#fafafa',
-    border: '1px solid #e5e5e5',
+  
+  metricCard: {
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
     borderRadius: '12px',
-    padding: '24px',
-  },
-  graphWrapper: {
-    width: '100%',
-  },
-  graphTitle: {
-    color: '#111111',
-    fontSize: '1.1rem',
-    fontWeight: 600,
-    margin: '0 0 20px 0',
-  },
-  graphSvg: {
-    width: '100%',
-    height: '250px',
-  },
-  graphLegend: {
-    textAlign: 'center',
-    marginTop: '8px',
-  },
-  graphLegendText: {
-    color: '#999999',
-    fontSize: '0.85rem',
-  },
-  graphPlaceholder: {
-    padding: '60px 24px',
-    textAlign: 'center',
-  },
-  graphPlaceholderIcon: {
-    fontSize: '3rem',
-    marginBottom: '16px',
-  },
-  graphPlaceholderText: {
-    color: '#999999',
-    fontSize: '0.95rem',
-    margin: 0,
-  },
-  statsBox: {
+    padding: '16px',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
     display: 'flex',
-    gap: '48px',
-    marginBottom: '32px',
-    padding: '24px 32px',
-    background: '#fafafa',
-    border: '1px solid #e5e5e5',
-    borderRadius: '8px',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    minHeight: '120px',
+    gap: '4px',
   },
-  statItem: {
+  metricLabel: {
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    color: '#6b7280',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+  },
+  metricValue: {
+    fontSize: '2rem',
+    fontWeight: 800,
+    color: '#111827',
+    margin: '4px 0',
+  },
+  metricStatus: {
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+
+  readinessCard: {
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '16px',
+    overflow: 'hidden',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+  },
+  readinessContent: {
+    padding: '32px',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+
+  chartCard: {
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '16px',
+    padding: '24px',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+  },
+  chartTitle: {
+    fontSize: '0.9rem',
+    fontWeight: 800,
+    color: '#111827',
+    marginBottom: '20px',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+  },
+  chartContainer: {
+    width: '100%',
+    height: '320px',
+  },
+
+  sectionTitle: {
+    fontSize: '0.9rem',
+    fontWeight: 800,
+    color: '#111827',
+    marginBottom: '12px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  
+  priorityCard: {
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '12px',
+    padding: '20px',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+  },
+  priorityList: {
     display: 'flex',
     flexDirection: 'column',
     gap: '4px',
   },
-  statValue: {
-    color: '#111111',
-    fontSize: '2rem',
-    fontWeight: 700,
+  priorityItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
   },
-  statLabel: {
-    color: '#666666',
+  priorityHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  priorityRank: {
+    fontSize: '0.9rem',
+    fontWeight: 800,
+    color: '#111827',
+  },
+  priorityTitle: {
+    fontSize: '0.95rem',
+    fontWeight: 800,
+    color: '#111827',
+  },
+  priorityFrequency: {
+    fontSize: '0.8rem',
+    color: '#9ca3af',
+  },
+  priorityDescription: {
+    fontSize: '0.85rem',
+    color: '#6b7280',
+    lineHeight: 1.4,
+  },
+  priorityAction: {
+    fontSize: '0.85rem',
+    color: '#2563eb',
+  },
+  emptyState: {
+    color: '#9ca3af',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    padding: '20px',
     fontSize: '0.9rem',
   },
-  loadingBox: {
-    color: '#666666',
-    padding: '48px',
+
+  progressCard: {
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '12px',
+    padding: '24px',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
   },
-  spinner: {
-    width: '32px',
-    height: '32px',
-    border: '3px solid #e5e5e5',
-    borderTop: '3px solid #000000',
-    borderRadius: '50%',
-    animation: 'spin 1s linear infinite',
-    margin: '0 auto 16px',
-  },
-  errorBox: {
-    background: '#fef2f2',
-    border: '1px solid #dc2626',
-    color: '#dc2626',
-    padding: '20px',
-    borderRadius: '8px',
-  },
-  emptyBox: {
-    padding: '48px 0',
-  },
-  emptyTitle: {
-    color: '#111111',
-    fontSize: '1.2rem',
-    margin: '0 0 8px 0',
-  },
-  emptyText: {
-    color: '#666666',
-    fontSize: '0.95rem',
-    margin: 0,
-  },
+
   sessionsList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
-  },
-  sessionsListTitle: {
-    color: '#111111',
-    fontSize: '1.1rem',
-    fontWeight: 600,
-    margin: '0 0 16px 0',
-  },
-  sessionCard: {
-    background: '#ffffff',
-    border: '1px solid #e5e5e5',
-    borderRadius: '8px',
-    overflow: 'hidden',
-  },
-  sessionHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '20px',
-    cursor: 'pointer',
-    transition: 'background 0.2s ease',
-  },
-  sessionLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-    flex: 1,
-  },
-  scoreCircle: {
-    width: '48px',
-    height: '48px',
-    borderRadius: '50%',
-    border: '3px solid',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontWeight: 700,
-    fontSize: '1.1rem',
-    background: '#ffffff',
-    flexShrink: 0,
-  },
-  sessionInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-    flex: 1,
-  },
-  sessionThemeRow: {
-    display: 'flex',
-    alignItems: 'center',
     gap: '8px',
   },
-  sessionTheme: {
-    color: '#111111',
-    fontSize: '1rem',
-    fontWeight: 500,
+  roundCard: {
+    background: '#ffffff',
+    borderRadius: '12px',
+    padding: '16px',
+    cursor: 'pointer',
+    border: '1px solid #e5e7eb',
+    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
   },
-  sessionNumber: {
-    color: '#999999',
-    fontSize: '0.8rem',
-    background: '#f0f0f0',
-    padding: '2px 6px',
-    borderRadius: '4px',
+  roundCardContent: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: '8px',
   },
-  sessionMeta: {
+  roundLeft: {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
-    flexWrap: 'wrap',
   },
-  sessionDate: {
-    color: '#666666',
-    fontSize: '0.85rem',
+  roundScore: {
+    fontSize: '1.5rem',
+    fontWeight: 800,
+    lineHeight: 1,
   },
-  sessionWpm: {
-    color: '#059669',
-    fontSize: '0.8rem',
-    fontWeight: 500,
-  },
-  sessionDuration: {
-    color: '#6366f1',
-    fontSize: '0.8rem',
-    fontWeight: 500,
-  },
-  expandIcon: {
-    color: '#333333',
-    fontSize: '1.2rem',
-    fontWeight: 600,
-    flexShrink: 0,
-  },
-  sessionDetails: {
-    padding: '0 20px 20px 20px',
-    borderTop: '1px solid #e5e5e5',
-  },
-  detailSection: {
-    marginTop: '16px',
-  },
-  detailLabel: {
-    color: '#666666',
-    fontSize: '0.9rem',
-    display: 'block',
-    marginBottom: '8px',
-    fontWeight: 500,
-  },
-  detailQuote: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    fontStyle: 'italic',
-  },
-  detailText: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    lineHeight: 1.7,
-    margin: 0,
-  },
-  detailSummary: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    lineHeight: 1.7,
-    margin: 0,
-    padding: '12px 16px',
-    background: '#f8fafc',
-    borderRadius: '6px',
-    borderLeft: '3px solid #6366f1',
-  },
-  detailDrill: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    lineHeight: 1.7,
-    margin: 0,
-    padding: '12px 16px',
-    background: '#f0f9ff',
-    borderRadius: '6px',
-    borderLeft: '3px solid #0284c7',
-  },
-  scoresGrid: {
-    display: 'flex',
-    gap: '16px',
-  },
-  scoreBox: {
+  roundMeta: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
-    padding: '12px 20px',
-    background: '#fafafa',
-    borderRadius: '8px',
-    border: '1px solid #e5e5e5',
+    gap: '2px',
   },
-  scoreBoxValue: {
-    fontSize: '1.5rem',
-    fontWeight: 700,
-    color: '#111111',
+  roundTheme: {
+    fontSize: '0.95rem',
+    fontWeight: 600,
+    color: '#111827',
   },
-  scoreBoxLabel: {
+  roundDate: {
     fontSize: '0.75rem',
-    color: '#666666',
-    marginTop: '4px',
+    color: '#9ca3af',
   },
-  statsRow: {
+  roundArrow: {
+    color: '#9ca3af',
+  },
+  roundStats: {
+    fontSize: '0.8rem',
+    color: '#6b7280',
+    marginBottom: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  statSeparator: {
+    color: '#d1d5db',
+  },
+  roundCats: {
+    fontSize: '0.75rem',
+    color: '#9ca3af',
     display: 'flex',
     gap: '12px',
     flexWrap: 'wrap',
   },
-  statBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    padding: '6px 12px',
-    background: '#f8fafc',
-    border: '1px solid #e2e8f0',
-    borderRadius: '6px',
-    fontSize: '0.85rem',
-    color: '#334155',
-  },
-  detailList: {
-    listStyle: 'none',
-    padding: 0,
-    margin: 0,
-  },
-  strengthItem: {
-    color: '#333333',
-    fontSize: '0.9rem',
-    padding: '10px 12px',
-    marginBottom: '6px',
-    background: '#ecfdf5',
-    borderLeft: '3px solid #059669',
-    borderRadius: '0 6px 6px 0',
-  },
-  improveItem: {
-    color: '#333333',
-    fontSize: '0.9rem',
-    padding: '10px 12px',
-    marginBottom: '6px',
-    background: '#fffbeb',
-    borderLeft: '3px solid #d97706',
-    borderRadius: '0 6px 6px 0',
+  roundWarnings: {
+    fontSize: '0.75rem',
+    color: '#dc2626',
+    fontWeight: 600,
+    marginTop: '6px',
   },
 };
 

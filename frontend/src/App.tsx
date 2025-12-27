@@ -36,6 +36,7 @@ import RecordScreen from './components/RecordScreen';
 import UploadSuccess from './components/UploadSuccess';
 import FeedbackReport from './components/FeedbackReport';
 import History from './components/History';
+import BallotView from './components/BallotView';
 
 function App() {
   // ==========================================
@@ -76,6 +77,9 @@ function App() {
   // Remaining prep time (passed to RecordScreen)
   const [remainingPrepTime, setRemainingPrepTime] = useState(0);
 
+  // ID of the session currently being viewed in 'ballot' mode
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
+
   // ==========================================
   // FLOW HANDLERS
   // ==========================================
@@ -84,6 +88,46 @@ function App() {
   useEffect(() => {
     console.log(`🧭 Flow step: ${currentStep}`);
   }, [currentStep]);
+
+  // Handle URL routing for direct links and back button
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const path = window.location.pathname;
+      if (path.startsWith('/ballot/')) {
+        const id = path.split('/ballot/')[1];
+        if (id) {
+          setViewingSessionId(id);
+          setCurrentStep('ballot');
+          setShowHistory(false);
+        }
+      } else if (path === '/') {
+        // Only reset if we are currently viewing a ballot or history
+        if (currentStep === 'ballot') {
+          setCurrentStep('start');
+          setViewingSessionId(null);
+        }
+      }
+    };
+
+    // Check on mount
+    handleLocationChange();
+
+    // Listen for back/forward
+    window.addEventListener('popstate', handleLocationChange);
+    return () => window.removeEventListener('popstate', handleLocationChange);
+  }, [currentStep]);
+
+  /**
+   * Called when user selects a session from history
+   * Switches to 'ballot' mode to fetch and display that specific session
+   */
+  const handleHistorySessionSelect = (session: any) => {
+    setShowHistory(false);
+    setViewingSessionId(session.id);
+    setCurrentStep('ballot');
+    // Update URL to match
+    window.history.pushState(null, '', `/ballot/${session.id}`);
+  };
 
   /**
    * Called when the round data is loaded from the API
@@ -192,6 +236,9 @@ function App() {
     setAnalysis(null);
     setIsFeedbackMock(false);
     setTranscript('');
+    setViewingSessionId(null);
+    // Reset URL
+    window.history.pushState(null, '', '/');
   };
 
   /**
@@ -313,6 +360,27 @@ function App() {
           />
         );
 
+      case 'ballot':
+        // Show specific ballot fetched from DB
+        if (!viewingSessionId) return null;
+        return (
+          <BallotView
+            sessionId={viewingSessionId}
+            onGoHome={handleGoHome}
+            onRedoRound={() => {
+              // Redo from history logic: 
+              // We'd need to load the quote and start prep.
+              // For now, simpler to just start new or go home.
+              handleGoHome();
+            }}
+            onNewRound={handleNewRound}
+            onNavigate={(id) => {
+              setViewingSessionId(id);
+              window.history.pushState(null, '', `/ballot/${id}`);
+            }}
+          />
+        );
+
       default:
         return <StartScreen onRoundStart={handleRoundStart} />;
     }
@@ -350,7 +418,7 @@ function App() {
 
   // Show history screen if requested
   if (showHistory) {
-    return <History onClose={() => setShowHistory(false)} />;
+    return <History onClose={() => setShowHistory(false)} onSelectSession={handleHistorySessionSelect} />;
   }
 
   return (
