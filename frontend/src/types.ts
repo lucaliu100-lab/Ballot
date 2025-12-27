@@ -31,20 +31,72 @@ export interface VideoAnalysisResponse {
   isMock?: boolean;
 }
 
-// Structured feedback from Gemini
-export interface DebateFeedback {
-  scores: {
-    structure: number;    // 1-10 score for organization
-    content: number;      // 1-10 score for analysis/reasoning  
-    delivery: number;     // 1-10 score for vocal/physical delivery
+// Structured feedback from Gemini (Competitive NSDA Standard)
+export interface DebateAnalysis {
+  overallScore: number;
+  performanceTier: string;
+  tournamentReady: boolean;
+  categoryScores: {
+    content: { score: number; weight: number; weighted: number };
+    delivery: { score: number; weight: number; weighted: number };
+    language: { score: number; weight: number; weighted: number };
+    bodyLanguage: { score: number; weight: number; weighted: number };
   };
-  strengths: string[];           // List of specific strengths
-  improvements: string[];        // List of specific improvements
-  practiceDrill: string;         // One concrete drill to practice
-  contentSummary?: string;       // Brief summary of the speech content
+  contentAnalysis: {
+    topicAdherence: { score: number; feedback: string };
+    argumentStructure: { score: number; feedback: string };
+    depthOfAnalysis: { score: number; feedback: string };
+    examplesEvidence: { score: number; feedback: string };
+    timeManagement: { score: number; feedback: string };
+  };
+  deliveryAnalysis: {
+    vocalVariety: { score: number; feedback: string };
+    pacing: { score: number; wpm: number; feedback: string };
+    articulation: { score: number; feedback: string };
+    fillerWords: {
+      score: number;
+      total: number;
+      perMinute: number;
+      breakdown: Record<string, number>;
+      feedback: string;
+    };
+  };
+  languageAnalysis: {
+    vocabulary: { score: number; feedback: string };
+    rhetoricalDevices: { score: number; examples: string[]; feedback: string };
+    emotionalAppeal: { score: number; feedback: string };
+    logicalAppeal: { score: number; feedback: string };
+  };
+  bodyLanguageAnalysis: {
+    eyeContact: { score: number; percentage: number; feedback: string };
+    gestures: { score: number; feedback: string };
+    posture: { score: number; feedback: string };
+    stagePresence: { score: number; feedback: string };
+  };
+  speechStats: {
+    duration: string;
+    wordCount: number;
+    wpm: number;
+    fillerWordCount: number;
+    fillerWordRate: number;
+  };
+  structureAnalysis: {
+    introduction: { timeRange: string; assessment: string };
+    bodyPoints: Array<{ timeRange: string; assessment: string }>;
+    conclusion: { timeRange: string; assessment: string };
+  };
+  priorityImprovements: Array<{
+    priority: number;
+    issue: string;
+    action: string;
+    impact: string;
+  }>;
+  strengths: string[];
+  practiceDrill: string;
+  nextSessionFocus: { primary: string; metric: string };
 }
 
-// Speech statistics calculated from transcript
+// Speech statistics
 export interface SpeechStats {
   durationSeconds: number;
   wordCount: number;
@@ -52,11 +104,11 @@ export interface SpeechStats {
   fillerCount: number;
 }
 
-// Response from /api/generate-feedback
+// Response from /api/process-all
 export interface FeedbackResponse {
   sessionId: string;
-  feedback: DebateFeedback;
-  speechStats?: SpeechStats;
+  transcript: string;
+  analysis?: DebateAnalysis;
   isMock?: boolean;
 }
 

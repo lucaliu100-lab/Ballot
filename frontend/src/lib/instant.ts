@@ -24,17 +24,26 @@ const schema = i.schema({
       
       // Speech stats
       durationSeconds: i.number(),
+      duration: i.string(), // Formatted duration string
       wordCount: i.number(),
       wordsPerMinute: i.number(),
+      wpm: i.number(), // Words per minute
       fillerCount: i.number(),
+      fillerWordCount: i.number(), // Total filler words
       
       // New feedback scores (structure, content, delivery)
       structureScore: i.number(),
       contentScore: i.number(),
       deliveryScore: i.number(),
+      languageScore: i.number(),
+      bodyLanguageScore: i.number(),
       
       // Legacy: overall score (for backward compatibility)
       overallScore: i.number(),
+      
+      // Competitive context
+      performanceTier: i.string(),
+      tournamentReady: i.boolean(),
       contentAnalysis: i.string(),
       deliveryAnalysis: i.string(),
       
@@ -55,6 +64,9 @@ const schema = i.schema({
       
       // File reference (video stored on server filesystem)
       videoFilename: i.string(),
+      
+      // Full analysis JSON (for future-proofing)
+      fullAnalysisJson: i.string(),
       
       // Timestamp
       createdAt: i.number(),

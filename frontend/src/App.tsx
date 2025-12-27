@@ -24,7 +24,7 @@ import { PREP_TIMER_DURATION, API_ENDPOINTS } from './lib/constants';
 import { extractFilename } from './lib/utils';
 
 // Import types
-import { FlowStep, RoundData, UploadResponse, DebateFeedback, SpeechStats } from './types';
+import { FlowStep, RoundData, UploadResponse, DebateAnalysis } from './types';
 
 // Import all screen components
 import Login from './components/Login';
@@ -60,14 +60,12 @@ function App() {
   // Response from the upload API
   const [uploadResponse, setUploadResponse] = useState<UploadResponse | null>(null);
 
-  // Feedback from Gemini 2.0 Flash
-  const [feedback, setFeedback] = useState<DebateFeedback | null>(null);
+  // Feedback/Analysis from Gemini 2.0 Flash
+  const [analysis, setAnalysis] = useState<DebateAnalysis | null>(null);
   const [isFeedbackMock, setIsFeedbackMock] = useState(false);
 
-  // Transcript and body language analysis (needed for saving to DB)
+  // Transcript (needed for saving to DB)
   const [transcript, setTranscript] = useState<string>('');
-  const [bodyLanguageAnalysis, setBodyLanguageAnalysis] = useState<string>('');
-  const [speechStats, setSpeechStats] = useState<SpeechStats | undefined>(undefined);
 
   // Show history screen
   const [showHistory, setShowHistory] = useState(false);
@@ -159,17 +157,13 @@ function App() {
    * Move to report step
    */
   const handleFeedbackReady = (
-    feedbackData: DebateFeedback, 
+    analysisData: DebateAnalysis, 
     isMock: boolean,
-    transcriptData: string,
-    bodyLanguageData: string,
-    speechStatsData?: SpeechStats
+    transcriptData: string
   ) => {
-    setFeedback(feedbackData);
+    setAnalysis(analysisData);
     setIsFeedbackMock(isMock);
     setTranscript(transcriptData);
-    setBodyLanguageAnalysis(bodyLanguageData);
-    setSpeechStats(speechStatsData);
     setCurrentStep('report');
   };
 
@@ -180,7 +174,7 @@ function App() {
   const handleRedoRound = () => {
     // Clear the upload and feedback, but keep round data and quote
     setUploadResponse(null);
-    setFeedback(null);
+    setAnalysis(null);
     setIsFeedbackMock(false);
     // Go back to prep timer
     setCurrentStep('prep');
@@ -195,11 +189,9 @@ function App() {
     setRoundData(null);
     setSelectedQuote('');
     setUploadResponse(null);
-    setFeedback(null);
+    setAnalysis(null);
     setIsFeedbackMock(false);
     setTranscript('');
-    setBodyLanguageAnalysis('');
-    setSpeechStats(undefined);
   };
 
   /**
@@ -210,11 +202,9 @@ function App() {
     // Clear previous data
     setSelectedQuote('');
     setUploadResponse(null);
-    setFeedback(null);
+    setAnalysis(null);
     setIsFeedbackMock(false);
     setTranscript('');
-    setBodyLanguageAnalysis('');
-    setSpeechStats(undefined);
     
     // Fetch new round data
     try {
@@ -308,16 +298,14 @@ function App() {
 
       case 'report':
         // Show the feedback report (only if we have feedback)
-        if (!feedback || !roundData) return null;
+        if (!analysis || !roundData) return null;
         return (
           <FeedbackReport
-            feedback={feedback}
+            analysis={analysis}
             theme={roundData.theme}
             quote={selectedQuote}
             transcript={transcript}
-            bodyLanguageAnalysis={bodyLanguageAnalysis}
             videoFilename={extractFilename(uploadResponse?.filePath || '')}
-            speechStats={speechStats}
             isMock={isFeedbackMock}
             onRedoRound={handleRedoRound}
             onNewRound={handleNewRound}

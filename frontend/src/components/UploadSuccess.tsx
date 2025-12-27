@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { UploadResponse, DebateFeedback, SpeechStats } from '../types';
+import { UploadResponse, DebateAnalysis, SpeechStats } from '../types';
 import { API_ENDPOINTS } from '../lib/constants';
 
 // Props that this component receives from its parent
@@ -17,11 +17,9 @@ interface UploadSuccessProps {
   theme: string;                    // Theme of the round
   quote: string;                    // Selected quote
   onFeedbackReady: (
-    feedback: DebateFeedback, 
+    analysis: DebateAnalysis, 
     isMock: boolean,
-    transcript: string,
-    bodyLanguageAnalysis: string,
-    speechStats?: SpeechStats
+    transcript: string
   ) => void;  // Called when feedback is ready
 }
 
@@ -102,11 +100,9 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
         // Short delay to show 100% before transitioning
         setTimeout(() => {
           onFeedbackReady(
-            data.feedback,
+            data.analysis,
             data.isMock || false,
-            data.transcript || '',
-            data.videoSummary || '',
-            data.speechStats
+            data.transcript || ''
           );
         }, 500);
 

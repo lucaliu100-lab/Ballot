@@ -55,17 +55,37 @@ function History({ onClose }: HistoryProps) {
   const sessionsForList = [...sessions].reverse();
 
   // Helper to calculate average score for a session
-  const getSessionAvgScore = (session: typeof sessions[0]): number => {
+  const getSessionAvgScore = (session: any): number => {
+    // Priority 1: Use explicit overallScore if available
+    if (session.overallScore !== undefined) {
+      return Number(session.overallScore);
+    }
+    
+    // Priority 2: Calculate from new breakdown if available
+    if (session.contentScore !== undefined && 
+        session.deliveryScore !== undefined && 
+        session.languageScore !== undefined && 
+        session.bodyLanguageScore !== undefined) {
+      return Number(((
+        (session.contentScore * 0.40) + 
+        (session.deliveryScore * 0.30) + 
+        (session.languageScore * 0.15) + 
+        (session.bodyLanguageScore * 0.15)
+      )).toFixed(1));
+    }
+
+    // Priority 3: Fallback to old breakdown
     if (session.structureScore !== undefined && 
         session.contentScore !== undefined && 
         session.deliveryScore !== undefined) {
-      return Math.round(
-        ((session.structureScore as number) + 
-         (session.contentScore as number) + 
-         (session.deliveryScore as number)) / 3
-      );
+      return Number(((
+        (session.structureScore as number) + 
+        (session.contentScore as number) + 
+        (session.deliveryScore as number)
+      ) / 3).toFixed(1));
     }
-    return (session.overallScore as number) || 0;
+    
+    return 0;
   };
 
   // Calculate stats
@@ -306,7 +326,7 @@ function History({ onClose }: HistoryProps) {
           {!isLoading && sessionsForList.length > 0 && (
             <div style={styles.sessionsList}>
               <h3 style={styles.sessionsListTitle}>All Sessions</h3>
-              {sessionsForList.map((session, index) => (
+              {sessionsForList.map((session: any, index) => (
                 <div key={session.id} style={styles.sessionCard}>
                   {/* Session header */}
                   <div 
@@ -361,23 +381,64 @@ function History({ onClose }: HistoryProps) {
                       </div>
 
                       {/* Score breakdown */}
-                      {session.structureScore !== undefined && (
+                      {(session.structureScore !== undefined || session.overallScore !== undefined) && (
                         <div style={styles.detailSection}>
-                          <span style={styles.detailLabel}>Scores:</span>
+                          <span style={styles.detailLabel}>Detailed Scores:</span>
                           <div style={styles.scoresGrid}>
-                            <div style={styles.scoreBox}>
-                              <span style={styles.scoreBoxValue}>{session.structureScore}</span>
-                              <span style={styles.scoreBoxLabel}>Structure</span>
-                            </div>
-                            <div style={styles.scoreBox}>
-                              <span style={styles.scoreBoxValue}>{session.contentScore}</span>
-                              <span style={styles.scoreBoxLabel}>Content</span>
-                            </div>
-                            <div style={styles.scoreBox}>
-                              <span style={styles.scoreBoxValue}>{session.deliveryScore}</span>
-                              <span style={styles.scoreBoxLabel}>Delivery</span>
-                            </div>
+                            {session.overallScore !== undefined && (
+                              <div style={{ ...styles.scoreBox, border: '1px solid #000' }}>
+                                <span style={styles.scoreBoxValue}>{Number(session.overallScore).toFixed(1)}</span>
+                                <span style={styles.scoreBoxLabel}>Overall</span>
+                              </div>
+                            )}
+                            {session.contentScore !== undefined && (
+                              <div style={styles.scoreBox}>
+                                <span style={styles.scoreBoxValue}>{session.contentScore}</span>
+                                <span style={styles.scoreBoxLabel}>Content (40%)</span>
+                              </div>
+                            )}
+                            {session.deliveryScore !== undefined && (
+                              <div style={styles.scoreBox}>
+                                <span style={styles.scoreBoxValue}>{session.deliveryScore}</span>
+                                <span style={styles.scoreBoxLabel}>Delivery (30%)</span>
+                              </div>
+                            )}
+                            {session.languageScore !== undefined && (
+                              <div style={styles.scoreBox}>
+                                <span style={styles.scoreBoxValue}>{session.languageScore}</span>
+                                <span style={styles.scoreBoxLabel}>Language (15%)</span>
+                              </div>
+                            )}
+                            {session.bodyLanguageScore !== undefined && (
+                              <div style={styles.scoreBox}>
+                                <span style={styles.scoreBoxValue}>{session.bodyLanguageScore}</span>
+                                <span style={styles.scoreBoxLabel}>Body (15%)</span>
+                              </div>
+                            )}
+                            {session.structureScore !== undefined && !session.contentScore && (
+                              <div style={styles.scoreBox}>
+                                <span style={styles.scoreBoxValue}>{session.structureScore}</span>
+                                <span style={styles.scoreBoxLabel}>Structure (Old)</span>
+                              </div>
+                            )}
                           </div>
+                        </div>
+                      )}
+
+                      {/* Performance Tier */}
+                      {session.performanceTier && (
+                        <div style={styles.detailSection}>
+                          <span style={styles.detailLabel}>Performance Tier:</span>
+                          <span style={{ 
+                            ...styles.detailText, 
+                            fontWeight: 700, 
+                            color: '#000000',
+                            background: '#f0f0f0',
+                            padding: '4px 8px',
+                            borderRadius: '4px'
+                          }}>
+                            {session.performanceTier}
+                          </span>
                         </div>
                       )}
 

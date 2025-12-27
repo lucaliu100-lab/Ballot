@@ -15,6 +15,11 @@ import path from 'path';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
+import dns from 'node:dns';
+
+// Fix for Node.js fetch "fetch failed" error on some network environments
+// Prefers IPv4 over IPv6 when resolving hostnames
+dns.setDefaultResultOrder('ipv4first');
 
 // Import our custom modules for Gemini multimodal analysis
 import { analyzeSpeechWithGemini, isGeminiConfigured, getGeminiStatus } from './geminiClient';
@@ -368,15 +373,64 @@ app.post('/api/process-all', async (req, res) => {
     return res.json({
       sessionId,
       transcript: "[Mock Transcript] Gemini API is not configured. Please add OPENROUTER_API_KEY to your .env file.",
-      videoSummary: "[Mock Analysis] The speaker appears engaged in the video.",
-      feedback: {
-        contentSummary: "[Mock] A summary of the speech.",
-        scores: { structure: 7, content: 6, delivery: 7 },
-        strengths: ["[Mock] Good energy"],
-        improvements: ["[Mock] More eye contact"],
-        practiceDrill: "[Mock] Practice with a timer."
+      analysis: {
+        overallScore: 6.5,
+        performanceTier: "Local",
+        tournamentReady: false,
+        categoryScores: {
+          content: { score: 6, weight: 0.40, weighted: 2.4 },
+          delivery: { score: 7, weight: 0.30, weighted: 2.1 },
+          language: { score: 7, weight: 0.15, weighted: 1.05 },
+          bodyLanguage: { score: 6, weight: 0.15, weighted: 0.9 }
+        },
+        contentAnalysis: {
+          topicAdherence: { score: 7, feedback: "[Mock] Good adherence to the theme." },
+          argumentStructure: { score: 6, feedback: "[Mock] Clear structure but needs more development." },
+          depthOfAnalysis: { score: 5, feedback: "[Mock] Surface level analysis." },
+          examplesEvidence: { score: 6, feedback: "[Mock] Good examples used." },
+          timeManagement: { score: 7, feedback: "[Mock] Good use of time." }
+        },
+        deliveryAnalysis: {
+          vocalVariety: { score: 7, feedback: "[Mock] Good tone changes." },
+          pacing: { score: 7, wpm: 145, feedback: "[Mock] Pacing is ideal." },
+          articulation: { score: 7, feedback: "[Mock] Clear enunciation." },
+          fillerWords: { score: 8, total: 12, perMinute: 2.5, breakdown: { "um": 5, "uh": 7 }, feedback: "[Mock] Low filler word count." }
+        },
+        languageAnalysis: {
+          vocabulary: { score: 7, feedback: "[Mock] Sophisticated vocabulary." },
+          rhetoricalDevices: { score: 6, examples: ["Rule of three"], feedback: "[Mock] Good use of rhetorical devices." },
+          emotionalAppeal: { score: 7, feedback: "[Mock] Strong pathos." },
+          logicalAppeal: { score: 7, feedback: "[Mock] Clear logos." }
+        },
+        bodyLanguageAnalysis: {
+          eyeContact: { score: 6, percentage: 65, feedback: "[Mock] Good eye contact but could be more consistent." },
+          gestures: { score: 7, feedback: "[Mock] Purposeful gestures." },
+          posture: { score: 7, feedback: "[Mock] Confident posture." },
+          stagePresence: { score: 7, feedback: "[Mock] Strong stage presence." }
+        },
+        speechStats: {
+          duration: "5:00",
+          wordCount: 725,
+          wpm: 145,
+          fillerWordCount: 12,
+          fillerWordRate: 2.4
+        },
+        structureAnalysis: {
+          introduction: { timeRange: "0:00-0:30", assessment: "Strong opening with clear thesis statement. Hook effectively captures attention." },
+          bodyPoints: [
+            { timeRange: "0:30-1:45", assessment: "First main point well-articulated with supporting evidence. Clear reasoning." },
+            { timeRange: "1:45-3:00", assessment: "Second point builds logically from the first. Good use of examples." },
+            { timeRange: "3:00-4:30", assessment: "Final point effectively ties arguments together. Strong rhetorical appeal." }
+          ],
+          conclusion: { timeRange: "4:30-5:00", assessment: "Powerful conclusion with memorable closing statement." }
+        },
+        priorityImprovements: [
+          { priority: 1, issue: "Eye contact", action: "Practice scanning the room", impact: "Increased audience engagement" }
+        ],
+        strengths: ["Strong delivery", "Good energy"],
+        practiceDrill: "Practice with a mirror to improve eye contact.",
+        nextSessionFocus: { primary: "Eye contact", metric: "75% consistent eye contact" }
       },
-      speechStats: { wordCount: 0, wordsPerMinute: 0, fillerCount: 0 },
       isMock: true,
     });
   }
@@ -392,15 +446,10 @@ app.post('/api/process-all', async (req, res) => {
       return res.status(500).json({ error: result.error || 'Gemini analysis failed' });
     }
 
-    // Calculate speech stats from the transcript Gemini provided
-    const speechStats = calculateSpeechStats(result.transcript);
-
     res.json({
       sessionId,
       transcript: result.transcript,
-      videoSummary: result.bodyLanguageAnalysis,
-      feedback: result.feedback,
-      speechStats,
+      analysis: result.analysis,
       isMock: false,
     });
 

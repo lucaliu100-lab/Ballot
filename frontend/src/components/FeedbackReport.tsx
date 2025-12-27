@@ -19,20 +19,14 @@
 import { useEffect, useRef, useMemo } from 'react';
 import { id } from '@instantdb/react';
 import { db } from '../lib/instant';
-import { DebateFeedback, SpeechStats } from '../types';
+import { DebateAnalysis } from '../types';
 
 // Helper to get color based on score
 function getScoreColor(score: number): string {
-  if (score >= 8) return '#059669'; // green
-  if (score >= 6) return '#d97706'; // amber
-  return '#dc2626'; // red
-}
-
-// Format duration in minutes:seconds
-function formatDuration(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  if (score >= 8) return '#059669'; // Excellent (green)
+  if (score >= 6) return '#fbbf24'; // Good (amber/yellow)
+  if (score >= 4) return '#f97316'; // Fair (orange)
+  return '#dc2626'; // Poor (red)
 }
 
 // Generate a unique hash from session content to prevent duplicates
@@ -48,13 +42,11 @@ function generateSessionHash(theme: string, quote: string, transcript: string, c
 }
 
 interface FeedbackReportProps {
-  feedback: DebateFeedback;
+  analysis: DebateAnalysis;
   theme: string;
   quote: string;
   transcript: string;
-  bodyLanguageAnalysis: string;
   videoFilename: string;
-  speechStats?: SpeechStats;
   isMock?: boolean;
   onRedoRound: () => void;    // Redo with same quote
   onNewRound: () => void;     // Start fresh with new theme
@@ -62,13 +54,11 @@ interface FeedbackReportProps {
 }
 
 function FeedbackReport({
-  feedback,
+  analysis,
   theme,
   quote,
   transcript,
-  bodyLanguageAnalysis,
   videoFilename,
-  speechStats,
   isMock,
   onRedoRound,
   onNewRound,
@@ -82,11 +72,6 @@ function FeedbackReport({
   const sessionId = useMemo(() => {
     return generateSessionHash(theme, quote, transcript, sessionCreatedAt.current);
   }, [theme, quote, transcript]);
-
-  // Calculate average score for overall display
-  const avgScore = Math.round(
-    (feedback.scores.structure + feedback.scores.content + feedback.scores.delivery) / 3
-  );
 
   // ===========================================
   // SAVE SESSION TO INSTANTDB
@@ -118,23 +103,27 @@ function FeedbackReport({
             theme,
             quote,
             transcript,
-            bodyLanguageAnalysis,
-            // Speech stats
-            durationSeconds: speechStats?.durationSeconds || 0,
-            wordCount: speechStats?.wordCount || 0,
-            wordsPerMinute: speechStats?.wordsPerMinute || 0,
-            fillerCount: speechStats?.fillerCount || 0,
-            // Scores
-            structureScore: feedback.scores.structure,
-            contentScore: feedback.scores.content,
-            deliveryScore: feedback.scores.delivery,
-            // Feedback content
-            strengths: feedback.strengths,
-            improvements: feedback.improvements,
-            practiceDrill: feedback.practiceDrill,
-            contentSummary: feedback.contentSummary || '',
+            // Competitive scores
+            overallScore: analysis.overallScore,
+            contentScore: analysis.categoryScores.content.score,
+            deliveryScore: analysis.categoryScores.delivery.score,
+            languageScore: analysis.categoryScores.language.score,
+            bodyLanguageScore: analysis.categoryScores.bodyLanguage.score,
+            // Stats
+            duration: analysis.speechStats.duration,
+            wordCount: analysis.speechStats.wordCount,
+            wpm: analysis.speechStats.wpm,
+            fillerWordCount: analysis.speechStats.fillerWordCount,
+            // Feedback
+            performanceTier: analysis.performanceTier,
+            tournamentReady: analysis.tournamentReady,
+            strengths: analysis.strengths,
+            practiceDrill: analysis.practiceDrill,
+            // Meta
             videoFilename,
             createdAt: sessionCreatedAt.current,
+            // Store full analysis as JSON string for future-proofing
+            fullAnalysisJson: JSON.stringify(analysis),
           })
         );
 
@@ -147,166 +136,250 @@ function FeedbackReport({
     };
 
     saveSession();
-  }, [sessionId, feedback, theme, quote, transcript, bodyLanguageAnalysis, videoFilename, speechStats, isMock]);
+  }, [sessionId, analysis, theme, quote, transcript, videoFilename, isMock]);
 
   // Helper to render a score circle
-  const renderScoreCircle = (score: number, label: string) => {
+  const renderScoreRing = (score: number, label: string, weight: string) => {
     const color = getScoreColor(score);
+    const radius = 42;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (score / 10) * circumference;
+
     return (
-      <div style={styles.scoreItem}>
-        <div style={styles.scoreCircle}>
-          <svg viewBox="0 0 100 100" style={styles.scoreSvg}>
-            {/* Background circle */}
+      <div style={styles.scoreCard}>
+        <div style={styles.ringContainer}>
+          <svg width="160" height="160" viewBox="0 0 100 100">
             <circle
               cx="50"
               cy="50"
-              r="45"
+              r={radius}
               fill="none"
-              stroke="#e5e5e5"
-              strokeWidth="6"
+              stroke="#f0f0f0"
+              strokeWidth="10"
             />
-            {/* Progress circle */}
             <circle
               cx="50"
               cy="50"
-              r="45"
+              r={radius}
               fill="none"
               stroke={color}
-              strokeWidth="6"
+              strokeWidth="10"
+              strokeDasharray={circumference}
+              strokeDashoffset={offset}
               strokeLinecap="round"
-              strokeDasharray={`${score * 28.3} 283`}
               transform="rotate(-90 50 50)"
-              style={{ transition: 'stroke-dasharray 1s ease' }}
+              style={{ transition: 'stroke-dashoffset 1s ease' }}
             />
+            <text
+              x="50"
+              y="55"
+              textAnchor="middle"
+              style={{ ...styles.ringScore, fill: color }}
+            >
+              {score.toFixed(1)}
+            </text>
           </svg>
-          <div style={styles.scoreValue}>
-            <span style={{ ...styles.scoreNumber, color }}>
-              {score}
-            </span>
-            <span style={styles.scoreMax}>/10</span>
-          </div>
         </div>
-        <p style={styles.scoreLabel}>{label}</p>
+        <div style={styles.scoreInfo}>
+          <div style={styles.scoreLabelMain}>{label}</div>
+          <div style={styles.scoreWeight}>{weight} weight</div>
+        </div>
       </div>
     );
   };
 
   return (
     <div style={styles.container}>
+      {/* Top Navigation */}
+      <button onClick={onGoHome} style={styles.backLink}>
+        ← Back to Dashboard
+      </button>
+
       {/* Header */}
       <div style={styles.header}>
-        <h1 style={styles.title}>Your Impromptu Feedback</h1>
-        <p style={styles.subtitle}>Evaluated by AI Impromptu Judge</p>
-        {isMock && (
-          <span style={styles.mockBadge}>Demo Mode - Configure DEEPSEEK_API_KEY for real feedback</span>
-        )}
+        <div style={styles.headerLeft}>
+          <div style={styles.tierBadge}>
+            {analysis.performanceTier.toUpperCase()} TIER
+          </div>
+          <h1 style={styles.title}>Tournament Ballot</h1>
+          <p style={styles.subtitle}>NSDA-Standard Impromptu Evaluation</p>
+        </div>
+        <div style={styles.overallScoreCard}>
+          <div style={styles.overallScoreTop}>OVERALL SCORE</div>
+          <div style={{ ...styles.overallScoreValue, color: getScoreColor(analysis.overallScore) }}>
+            {analysis.overallScore.toFixed(1)}<span style={styles.overallMax}>/10.0</span>
+          </div>
+          <div style={styles.readinessRow}>
+            Tournament Ready: <span style={{ fontWeight: 700, color: analysis.tournamentReady ? '#059669' : '#dc2626' }}>{analysis.tournamentReady ? 'YES' : 'NO'}</span>
+          </div>
+        </div>
       </div>
 
-      {/* Main content */}
-      <div style={styles.mainContent}>
-        {/* Context: Theme and Quote */}
-        <div style={styles.contextBox}>
-          <div style={styles.contextItem}>
-            <span style={styles.contextLabel}>Theme:</span>
-            <span style={styles.contextValue}>{theme}</span>
+      {/* Score Rings Section */}
+      <div style={styles.ringsGrid}>
+        {renderScoreRing(analysis.categoryScores.content.score, 'Content', '40%')}
+        {renderScoreRing(analysis.categoryScores.delivery.score, 'Delivery', '30%')}
+        {renderScoreRing(analysis.categoryScores.language.score, 'Language', '15%')}
+        {renderScoreRing(analysis.categoryScores.bodyLanguage.score, 'Body Language', '15%')}
+      </div>
+
+      {/* Stats Bar */}
+      <div style={styles.statsBar}>
+        <div style={styles.statsBarItem}>
+          <div style={styles.statsBarLabel}>DURATION</div>
+          <div style={styles.statsBarValue}>{analysis.speechStats.duration}</div>
+        </div>
+        <div style={styles.statsBarItem}>
+          <div style={styles.statsBarLabel}>WORDS</div>
+          <div style={styles.statsBarValue}>{analysis.speechStats.wordCount}</div>
+        </div>
+        <div style={styles.statsBarItem}>
+          <div style={styles.statsBarLabel}>PACE</div>
+          <div style={styles.statsBarValue}>{analysis.speechStats.wpm} WPM</div>
+        </div>
+        <div style={styles.statsBarItem}>
+          <div style={styles.statsBarLabel}>FILLERS</div>
+          <div style={styles.statsBarValue}>{analysis.speechStats.fillerWordCount} total</div>
+        </div>
+      </div>
+
+      {/* Main Content Two Columns */}
+      <div style={styles.contentGrid}>
+        {/* Left Column */}
+        <div style={styles.leftCol}>
+          <div style={styles.analysisSectionWithBg}>
+            <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
+            
+            <div style={styles.analysisItem}>
+              <div style={styles.analysisHeader}>
+                <span style={styles.analysisTitle}>Topic Adherence</span>
+                <div style={styles.analysisScore}>
+                  <div style={styles.progressBarBg}>
+                    <div style={{ ...styles.progressBarFill, width: `${analysis.contentAnalysis.topicAdherence.score * 10}%` }} />
+                  </div>
+                  <span style={styles.scoreText}>{analysis.contentAnalysis.topicAdherence.score}/10</span>
+                </div>
+              </div>
+              <p style={styles.analysisFeedback}>{analysis.contentAnalysis.topicAdherence.feedback}</p>
+            </div>
+
+            <div style={styles.analysisItem}>
+              <div style={styles.analysisHeader}>
+                <span style={styles.analysisTitle}>Argument Structure</span>
+                <div style={styles.analysisScore}>
+                  <div style={styles.progressBarBg}>
+                    <div style={{ ...styles.progressBarFill, width: `${analysis.contentAnalysis.argumentStructure.score * 10}%` }} />
+                  </div>
+                  <span style={styles.scoreText}>{analysis.contentAnalysis.argumentStructure.score}/10</span>
+                </div>
+              </div>
+              <p style={styles.analysisFeedback}>{analysis.contentAnalysis.argumentStructure.feedback}</p>
+            </div>
           </div>
-          <div style={styles.contextItem}>
-            <span style={styles.contextLabel}>Quote:</span>
-            <span style={styles.contextValueQuote}>"{quote}"</span>
+
+          <div style={styles.analysisSectionWithBg}>
+            <h2 style={styles.sectionHeader}>| Delivery Analysis (30%)</h2>
+            
+            <div style={styles.analysisItem}>
+              <div style={styles.analysisHeader}>
+                <span style={styles.analysisTitle}>Vocal Variety</span>
+                <span style={styles.scoreTextPlain}>{analysis.deliveryAnalysis.vocalVariety.score}/10</span>
+              </div>
+              <p style={styles.analysisFeedback}>{analysis.deliveryAnalysis.vocalVariety.feedback}</p>
+            </div>
+
+            <div style={styles.fillerBreakdown}>
+              <div style={styles.fillerLabel}>Filler Word Breakdown</div>
+              <div style={styles.fillerBadges}>
+                {Object.entries(analysis.deliveryAnalysis.fillerWords.breakdown).length > 0 ? (
+                  Object.entries(analysis.deliveryAnalysis.fillerWords.breakdown).map(([word, count]) => (
+                    <div key={word} style={styles.fillerBadge}>
+                      <span style={styles.fillerWord}>{word}</span>
+                      <span style={styles.fillerCount}>{count}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={styles.fillerBadge}>
+                    <span style={styles.fillerWord}>Total</span>
+                    <span style={styles.fillerCount}>0</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div style={styles.analysisSection}>
+            <h2 style={styles.sectionHeader}>| Structural Breakdown</h2>
+            <div style={styles.structureList}>
+              <div style={styles.structureEntry}>
+                <div style={styles.structureTime}>{analysis.structureAnalysis.introduction.timeRange}</div>
+                <div style={styles.structureContent}>
+                  <div style={styles.structureTitle}>Introduction</div>
+                  <p style={styles.structureText}>{analysis.structureAnalysis.introduction.assessment}</p>
+                </div>
+              </div>
+              {analysis.structureAnalysis.bodyPoints.map((point, idx) => (
+                <div key={idx} style={styles.structureEntry}>
+                  <div style={styles.structureTime}>{point.timeRange}</div>
+                  <div style={styles.structureContent}>
+                    <div style={styles.structureTitle}>Body Point {idx + 1}</div>
+                    <p style={styles.structureText}>{point.assessment}</p>
+                  </div>
+                </div>
+              ))}
+              <div style={styles.structureEntry}>
+                <div style={styles.structureTime}>{analysis.structureAnalysis.conclusion.timeRange}</div>
+                <div style={styles.structureContent}>
+                  <div style={styles.structureTitle}>Conclusion</div>
+                  <p style={styles.structureText}>{analysis.structureAnalysis.conclusion.assessment}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Three Score Circles */}
-        <div style={styles.scoresContainer}>
-          {renderScoreCircle(feedback.scores.structure, 'Structure')}
-          {renderScoreCircle(feedback.scores.content, 'Content')}
-          {renderScoreCircle(feedback.scores.delivery, 'Delivery')}
-        </div>
-
-        {/* Average Score Indicator */}
-        <div style={styles.avgScoreBox}>
-          <span style={styles.avgScoreLabel}>Average Score:</span>
-          <span style={{ ...styles.avgScoreValue, color: getScoreColor(avgScore) }}>
-            {avgScore}/10
-          </span>
-        </div>
-
-        {/* Speech Stats */}
-        {speechStats && (
-          <div style={styles.statsGrid}>
-            <div style={styles.statBox}>
-              <span style={styles.statIcon}>⏱️</span>
-              <span style={styles.statValue}>{formatDuration(speechStats.durationSeconds)}</span>
-              <span style={styles.statLabel}>Duration</span>
-            </div>
-            <div style={styles.statBox}>
-              <span style={styles.statIcon}>📝</span>
-              <span style={styles.statValue}>{speechStats.wordCount}</span>
-              <span style={styles.statLabel}>Words</span>
-            </div>
-            <div style={styles.statBox}>
-              <span style={styles.statIcon}>🎯</span>
-              <span style={styles.statValue}>{speechStats.wordsPerMinute}</span>
-              <span style={styles.statLabel}>WPM</span>
-            </div>
-            <div style={styles.statBox}>
-              <span style={styles.statIcon}>💬</span>
-              <span style={styles.statValue}>{speechStats.fillerCount}</span>
-              <span style={styles.statLabel}>Fillers</span>
-            </div>
-          </div>
-        )}
-
-        {/* Content Summary */}
-        {feedback.contentSummary && (
-          <div style={styles.summaryBox}>
-            <h3 style={styles.summaryTitle}>📄 Content Summary</h3>
-            <p style={styles.summaryText}>{feedback.contentSummary}</p>
-          </div>
-        )}
-
-        {/* Strengths */}
-        <div style={styles.listSection}>
-          <h3 style={styles.listTitle}>✓ Strengths</h3>
-          <ul style={styles.list}>
-            {feedback.strengths.map((strength, index) => (
-              <li key={index} style={styles.listItemStrength}>
-                {strength}
-              </li>
+        {/* Right Column */}
+        <div style={styles.rightCol}>
+          <div style={styles.priorityBox}>
+            <h3 style={styles.priorityBoxTitle}>Priority Improvements</h3>
+            {analysis.priorityImprovements.map((imp) => (
+              <div key={imp.priority} style={styles.priorityItem}>
+                <div style={styles.priorityItemTitle}>#{imp.priority} {imp.issue}</div>
+                <div style={styles.priorityDetail}>
+                  <span style={styles.boldLabel}>Action:</span> {imp.action}
+                </div>
+                <div style={styles.priorityDetail}>
+                  <span style={{ ...styles.boldLabel, color: '#dc2626' }}>Impact:</span> {imp.impact}
+                </div>
+              </div>
             ))}
-          </ul>
-        </div>
+          </div>
 
-        {/* Areas for Improvement */}
-        <div style={styles.listSection}>
-          <h3 style={styles.listTitle}>↑ Areas to Improve</h3>
-          <ul style={styles.list}>
-            {feedback.improvements.map((improvement, index) => (
-              <li key={index} style={styles.listItemImprove}>
-                {improvement}
-              </li>
-            ))}
-          </ul>
-        </div>
+          <div style={styles.drillBox}>
+            <h3 style={styles.drillBoxTitle}>Practice Drill</h3>
+            <p style={styles.drillText}>{analysis.practiceDrill}</p>
+            <div style={styles.nextFocus}>
+              <span style={styles.nextFocusLabel}>Next Focus:</span> {analysis.nextSessionFocus.primary}
+            </div>
+          </div>
 
-        {/* Practice Drill */}
-        <div style={styles.drillBox}>
-          <h3 style={styles.drillTitle}>🎯 Practice Drill</h3>
-          <p style={styles.drillText}>{feedback.practiceDrill}</p>
+          <div style={styles.strengthsSection}>
+            <h3 style={styles.sectionHeader}>| Strengths to Maintain</h3>
+            <div style={styles.strengthsList}>
+              {analysis.strengths.map((s, i) => (
+                <div key={i} style={styles.strengthItem}>
+                  <span style={styles.checkmark}>✓</span> {s}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
+      </div>
 
-        {/* Action Buttons */}
-        <div style={styles.buttonContainer}>
-          <button onClick={onGoHome} style={styles.homeButton}>
-            Return to Homepage
-          </button>
-          <button onClick={onRedoRound} style={styles.redoButton}>
-            Redo This Round
-          </button>
-          <button onClick={onNewRound} style={styles.newButton}>
-            Start New Round
-          </button>
-        </div>
+      {/* Footer Buttons */}
+      <div style={styles.footerActions}>
+        <button onClick={onRedoRound} style={styles.secondaryButton}>Redo Round</button>
+        <button onClick={onNewRound} style={styles.primaryButton}>Start New Round</button>
       </div>
     </div>
   );
@@ -321,264 +394,411 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     minHeight: '100vh',
-    padding: '80px 48px 120px 48px',
+    padding: '40px 48px 120px 48px',
     background: '#ffffff',
+    color: '#000000',
+    fontFamily: "'Segoe UI', Roboto, sans-serif",
+    maxWidth: '1400px',
+    margin: '0 auto',
+  },
+  backLink: {
+    background: 'none',
+    border: 'none',
+    color: '#666666',
+    fontSize: '0.9rem',
+    cursor: 'pointer',
+    padding: 0,
+    marginBottom: '32px',
+    textAlign: 'left',
+    width: 'fit-content',
   },
   header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginBottom: '48px',
   },
-  title: {
-    color: '#111111',
-    fontSize: '2.5rem',
-    margin: '0 0 12px 0',
+  headerLeft: {
+    flex: 1,
+  },
+  tierBadge: {
+    background: '#000000',
+    color: '#ffffff',
+    padding: '4px 12px',
+    borderRadius: '4px',
+    fontSize: '0.75rem',
     fontWeight: 700,
+    width: 'fit-content',
+    marginBottom: '16px',
+    letterSpacing: '0.05em',
+  },
+  title: {
+    fontSize: '3rem',
+    fontWeight: 800,
+    margin: '0 0 8px 0',
     letterSpacing: '-0.02em',
   },
   subtitle: {
-    color: '#666666',
     fontSize: '1.1rem',
+    color: '#666666',
     margin: 0,
   },
-  mockBadge: {
-    display: 'inline-block',
-    marginTop: '16px',
-    background: '#fffbeb',
-    color: '#d97706',
-    padding: '8px 16px',
-    borderRadius: '8px',
-    fontSize: '0.85rem',
-    border: '1px solid #fbbf24',
+  overallScoreCard: {
+    background: '#ffffff',
+    border: '1px solid #eeeeee',
+    borderRadius: '12px',
+    padding: '24px',
+    textAlign: 'center',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+    minWidth: '200px',
   },
-  mainContent: {
-    maxWidth: '900px',
-  },
-  contextBox: {
-    background: '#fafafa',
-    border: '1px solid #000000',
-    borderRadius: '8px',
-    padding: '20px 24px',
-    marginBottom: '40px',
-  },
-  contextItem: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '12px',
+  overallScoreTop: {
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    color: '#999999',
+    letterSpacing: '0.1em',
     marginBottom: '8px',
   },
-  contextLabel: {
-    color: '#666666',
-    fontSize: '0.95rem',
-    minWidth: '60px',
+  overallScoreValue: {
+    fontSize: '3.5rem',
+    fontWeight: 800,
+    lineHeight: 1,
+    marginBottom: '8px',
   },
-  contextValue: {
-    color: '#111111',
-    fontSize: '0.95rem',
-    fontWeight: 500,
+  overallMax: {
+    fontSize: '1.2rem',
+    color: '#cccccc',
+    fontWeight: 400,
   },
-  contextValueQuote: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    fontStyle: 'italic',
+  readinessRow: {
+    fontSize: '0.85rem',
+    fontWeight: 600,
+    marginTop: '12px',
+    paddingTop: '12px',
+    borderTop: '1px solid #eeeeee',
   },
-  scoresContainer: {
-    display: 'flex',
-    justifyContent: 'flex-start',
-    gap: '48px',
-    marginBottom: '24px',
-    flexWrap: 'wrap',
+  ringsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, 1fr)',
+    gap: '24px',
+    marginBottom: '48px',
+    maxWidth: '1000px',
+    margin: '0 auto 48px auto',
   },
-  scoreItem: {
+  scoreCard: {
+    background: '#ffffff',
+    border: 'none',
+    borderRadius: '16px',
+    padding: '24px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-  },
-  scoreCircle: {
-    position: 'relative',
-    width: '120px',
-    height: '120px',
-  },
-  scoreSvg: {
-    width: '100%',
-    height: '100%',
-  },
-  scoreValue: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
     textAlign: 'center',
   },
-  scoreNumber: {
-    fontSize: '2rem',
-    fontWeight: 700,
+  ringContainer: {
+    marginBottom: '16px',
   },
-  scoreMax: {
-    color: '#666666',
-    fontSize: '0.85rem',
+  ringScore: {
+    fontSize: '24px',
+    fontWeight: 800,
+    fontFamily: 'inherit',
   },
-  scoreLabel: {
-    color: '#333333',
-    fontSize: '0.9rem',
-    fontWeight: 500,
-    marginTop: '8px',
-    textAlign: 'center',
-  },
-  avgScoreBox: {
+  scoreInfo: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    marginBottom: '40px',
-    padding: '12px 20px',
-    background: '#fafafa',
-    borderRadius: '8px',
-    width: 'fit-content',
+    flexDirection: 'column',
+    gap: '4px',
   },
-  avgScoreLabel: {
-    color: '#666666',
-    fontSize: '0.95rem',
+  scoreLabelMain: {
+    fontSize: '1rem',
+    fontWeight: 700,
+    color: '#000000',
   },
-  avgScoreValue: {
+  scoreWeight: {
+    fontSize: '0.75rem',
+    color: '#999999',
+  },
+  statsBar: {
+    background: '#111111',
+    borderRadius: '12px',
+    padding: '24px 48px',
+    display: 'flex',
+    justifyContent: 'space-around',
+    marginBottom: '64px',
+    color: '#ffffff',
+  },
+  statsBarItem: {
+    textAlign: 'center',
+  },
+  statsBarLabel: {
+    fontSize: '0.7rem',
+    fontWeight: 600,
+    color: '#888888',
+    letterSpacing: '0.1em',
+    marginBottom: '8px',
+  },
+  statsBarValue: {
     fontSize: '1.25rem',
     fontWeight: 700,
   },
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: '16px',
-    marginBottom: '32px',
+  contentGrid: {
+    display: 'flex',
+    gap: '64px',
+    alignItems: 'flex-start',
   },
-  statBox: {
+  leftCol: {
+    flex: 1.6,
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
-    padding: '16px',
+    gap: '64px',
+  },
+  analysisSection: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  analysisSectionWithBg: {
+    display: 'flex',
+    flexDirection: 'column',
     background: '#fafafa',
-    borderRadius: '8px',
-    border: '1px solid #e5e5e5',
-  },
-  statIcon: {
-    fontSize: '1.5rem',
-    marginBottom: '8px',
-  },
-  statValue: {
-    fontSize: '1.5rem',
-    fontWeight: 700,
-    color: '#111111',
-  },
-  statLabel: {
-    fontSize: '0.8rem',
-    color: '#666666',
-    marginTop: '4px',
-  },
-  summaryBox: {
-    background: '#f8fafc',
-    border: '1px solid #e2e8f0',
-    borderRadius: '8px',
-    padding: '24px',
+    border: '1px solid #f0f0f0',
+    borderRadius: '16px',
+    padding: '32px',
     marginBottom: '32px',
   },
-  summaryTitle: {
-    color: '#334155',
+  sectionHeader: {
+    fontSize: '1.25rem',
+    fontWeight: 800,
+    marginBottom: '32px',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  analysisItem: {
+    marginBottom: '32px',
+  },
+  analysisHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '12px',
+  },
+  analysisTitle: {
     fontSize: '1rem',
+    fontWeight: 700,
+  },
+  analysisScore: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+  },
+  progressBarBg: {
+    width: '120px',
+    height: '6px',
+    background: '#f3f4f6',
+    borderRadius: '3px',
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    background: '#000000',
+  },
+  scoreText: {
+    fontSize: '0.9rem',
     fontWeight: 600,
-    margin: '0 0 12px 0',
+    color: '#666666',
+    minWidth: '40px',
+    textAlign: 'right',
   },
-  summaryText: {
-    color: '#475569',
-    fontSize: '0.95rem',
-    lineHeight: 1.7,
-    margin: 0,
-  },
-  listSection: {
-    marginBottom: '32px',
-  },
-  listTitle: {
-    color: '#111111',
-    fontSize: '1.1rem',
+  scoreTextPlain: {
+    fontSize: '0.9rem',
     fontWeight: 600,
-    margin: '0 0 16px 0',
+    color: '#666666',
   },
-  list: {
-    listStyle: 'none',
-    padding: 0,
-    margin: 0,
-  },
-  listItemStrength: {
-    color: '#333333',
+  analysisFeedback: {
     fontSize: '0.95rem',
     lineHeight: 1.6,
-    padding: '12px 16px',
-    marginBottom: '8px',
-    background: '#ecfdf5',
-    borderLeft: '4px solid #059669',
-    borderRadius: '0 8px 8px 0',
+    color: '#444444',
+    margin: 0,
   },
-  listItemImprove: {
-    color: '#333333',
+  fillerBreakdown: {
+    marginTop: '16px',
+    paddingTop: '16px',
+    borderTop: '1px dashed #eeeeee',
+  },
+  fillerLabel: {
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    color: '#999999',
+    marginBottom: '12px',
+  },
+  fillerBadges: {
+    display: 'flex',
+    gap: '12px',
+    flexWrap: 'wrap',
+  },
+  fillerBadge: {
+    background: '#ffffff',
+    border: '1px solid #eeeeee',
+    borderRadius: '6px',
+    padding: '6px 12px',
+    fontSize: '0.85rem',
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+  },
+  fillerWord: {
+    color: '#666666',
+    fontStyle: 'italic',
+  },
+  fillerCount: {
+    fontWeight: 700,
+    color: '#000000',
+  },
+  structureList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  structureEntry: {
+    background: '#ffffff',
+    border: '1px solid #eeeeee',
+    borderRadius: '12px',
+    padding: '20px',
+    display: 'flex',
+    gap: '24px',
+  },
+  structureTime: {
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    color: '#999999',
+    minWidth: '70px',
+  },
+  structureContent: {
+    flex: 1,
+  },
+  structureTitle: {
     fontSize: '0.95rem',
-    lineHeight: 1.6,
-    padding: '12px 16px',
+    fontWeight: 700,
     marginBottom: '8px',
-    background: '#fffbeb',
-    borderLeft: '4px solid #d97706',
-    borderRadius: '0 8px 8px 0',
+  },
+  structureText: {
+    fontSize: '0.9rem',
+    lineHeight: 1.5,
+    color: '#666666',
+    margin: 0,
+  },
+  rightCol: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '32px',
+  },
+  priorityBox: {
+    background: '#fff1f2',
+    border: '1px solid #fecaca',
+    borderRadius: '16px',
+    padding: '32px',
+  },
+  priorityBoxTitle: {
+    fontSize: '1.2rem',
+    fontWeight: 700,
+    color: '#be123c',
+    marginBottom: '24px',
+  },
+  priorityItem: {
+    marginBottom: '24px',
+    paddingBottom: '24px',
+    borderBottom: '1px solid rgba(190, 18, 60, 0.1)',
+  },
+  priorityItemTitle: {
+    fontSize: '1rem',
+    fontWeight: 800,
+    marginBottom: '12px',
+  },
+  priorityDetail: {
+    fontSize: '0.9rem',
+    lineHeight: 1.5,
+    marginBottom: '8px',
+  },
+  boldLabel: {
+    fontWeight: 700,
   },
   drillBox: {
     background: '#f0f9ff',
-    border: '2px solid #0284c7',
-    borderRadius: '8px',
-    padding: '28px',
-    marginBottom: '40px',
+    border: '1px solid #bae6fd',
+    borderRadius: '16px',
+    padding: '32px',
   },
-  drillTitle: {
+  drillBoxTitle: {
+    fontSize: '1.2rem',
+    fontWeight: 700,
     color: '#0369a1',
-    fontSize: '1.1rem',
-    fontWeight: 600,
-    margin: '0 0 16px 0',
+    marginBottom: '16px',
   },
   drillText: {
-    color: '#333333',
-    fontSize: '1rem',
-    lineHeight: 1.7,
-    margin: 0,
+    fontSize: '0.95rem',
+    lineHeight: 1.6,
+    color: '#0c4a6e',
+    marginBottom: '24px',
   },
-  buttonContainer: {
+  nextFocus: {
+    borderTop: '1px solid rgba(3, 105, 161, 0.1)',
+    paddingTop: '16px',
+    fontSize: '0.9rem',
+    fontWeight: 700,
+    color: '#0369a1',
+  },
+  nextFocusLabel: {
+    fontWeight: 800,
+  },
+  strengthsSection: {
+    marginTop: '0',
+  },
+  strengthsList: {
     display: 'flex',
-    gap: '16px',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
+    gap: '12px',
   },
-  homeButton: {
-    background: '#f3f4f6',
-    color: '#374151',
-    border: '2px solid #d1d5db',
-    padding: '16px 32px',
-    fontSize: '1rem',
-    fontWeight: 600,
+  strengthItem: {
+    background: '#f0fdf4',
+    padding: '12px 16px',
     borderRadius: '8px',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  },
-  redoButton: {
-    background: '#ffffff',
-    color: '#333333',
-    border: '2px solid #000000',
-    padding: '16px 32px',
-    fontSize: '1rem',
+    fontSize: '0.95rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
     fontWeight: 600,
-    borderRadius: '8px',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
+    color: '#166534',
   },
-  newButton: {
+  checkmark: {
+    color: '#22c55e',
+    fontWeight: 900,
+  },
+  footerActions: {
+    marginTop: '80px',
+    display: 'flex',
+    justifyContent: 'center',
+    gap: '24px',
+    paddingTop: '48px',
+    borderTop: '1px solid #eeeeee',
+  },
+  primaryButton: {
     background: '#000000',
     color: '#ffffff',
-    border: '2px solid #000000',
-    padding: '16px 32px',
-    fontSize: '1rem',
-    fontWeight: 600,
+    border: 'none',
+    padding: '16px 40px',
     borderRadius: '8px',
+    fontSize: '1rem',
+    fontWeight: 700,
     cursor: 'pointer',
-    transition: 'all 0.2s ease',
+  },
+  secondaryButton: {
+    background: '#ffffff',
+    color: '#000000',
+    border: '2px solid #000000',
+    padding: '14px 40px',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    fontWeight: 700,
+    cursor: 'pointer',
   },
 };
 
