@@ -252,20 +252,20 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   const isStructureWeak = avgContentScore < 6.0;
 
   // Tournament Readiness Logic
-  let tierName = "LOCAL ROUND";
+  let tierName = "DEVELOPING";
   let tierColor = "#9ca3af"; // Gray
   let tierGradient = "linear-gradient(135deg, #f3f4f6 0%, #ffffff 100%)";
   let tierTextColor = "#374151";
 
-  let nextTier = "Quarterfinals";
-  let nextThreshold = "4.0";
+  let nextTier = "Local";
+  let nextThreshold = "5.0";
   let recommendations = [
-    "Improve argument structure",
-    "Increase speech length to 5+ minutes",
-    "Practice 3-4 per week"
+    "Focus on basic structure",
+    "Speak for at least 3 minutes",
+    "Practice weekly"
   ];
 
-  if (averageScore >= 8.0) {
+  if (averageScore >= 9.0) {
     tierName = "FINALS";
     tierColor = "#059669"; // Green
     tierGradient = "linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%)";
@@ -277,25 +277,37 @@ function History({ onClose, onSelectSession }: HistoryProps) {
       "Continue weekly practice",
       "Focus on advanced techniques"
     ];
-  } else if (averageScore >= 6.0) {
+  } else if (averageScore >= 8.0) {
     tierName = "SEMIFINALS";
     tierColor = "#2563eb"; // Blue
     tierGradient = "linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)";
     tierTextColor = "#1e40af";
     nextTier = "Finals";
-    nextThreshold = "8.0";
+    nextThreshold = "9.0";
     recommendations = [
       "Refine vocal delivery and pacing",
       "Strengthen evidence and examples",
       "Practice 2-3 per week"
     ];
-  } else if (averageScore >= 4.0) {
+  } else if (averageScore >= 6.5) {
     tierName = "QUARTERFINALS";
     tierColor = "#ca8a04"; // Yellow/Dark Gold
     tierGradient = "linear-gradient(135deg, #fefce8 0%, #ffffff 100%)";
     tierTextColor = "#854d0e";
     nextTier = "Semifinals";
-    nextThreshold = "6.0";
+    nextThreshold = "8.0";
+    recommendations = [
+      "Improve argument structure",
+      "Increase speech length to 5+ minutes",
+      "Practice 3-4 per week"
+    ];
+  } else if (averageScore >= 5.0) {
+    tierName = "LOCAL ROUND";
+    tierColor = "#7c3aed"; // Purple
+    tierGradient = "linear-gradient(135deg, #f5f3ff 0%, #ffffff 100%)";
+    tierTextColor = "#5b21b6";
+    nextTier = "Quarterfinals";
+    nextThreshold = "6.5";
   }
 
   // Priority Improvements Logic (Detailed Aggregation)

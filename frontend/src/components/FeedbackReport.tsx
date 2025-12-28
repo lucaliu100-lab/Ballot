@@ -104,9 +104,10 @@ interface AnalysisItemProps {
   score: number;
   feedback: string;
   showProgress?: boolean;
+  customMetric?: string;
 }
 
-const AnalysisItem = ({ title, score, feedback, showProgress = true }: AnalysisItemProps) => {
+const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetric }: AnalysisItemProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const parsed = parseFeedback(feedback);
   
@@ -116,6 +117,7 @@ const AnalysisItem = ({ title, score, feedback, showProgress = true }: AnalysisI
         <div style={styles.analysisTitleGroup}>
           <span style={styles.analysisTitle}>{title}</span>
           <span style={styles.scoreBadge}>{score.toFixed(1)}</span>
+          {customMetric && <span style={styles.customMetricBadge}>{customMetric}</span>}
         </div>
         <div style={styles.analysisScore}>
           {showProgress && (
@@ -232,6 +234,20 @@ function FeedbackReport({
            console.error('No user found, cannot save session');
            return;
         }
+
+          // Check if already saved in Supabase to prevent duplicates
+          const { data: existing } = await supabase
+            .from('sessions')
+            .select('id')
+            .eq('user_id', user.id)
+            .eq('created_at', new Date(sessionCreatedAt.current).toISOString())
+            .maybeSingle();
+
+          if (existing) {
+             console.log('📝 Skipping save - session already exists in DB');
+             savedRef.current = true;
+             return;
+          }
 
         const { error } = await supabase.from('sessions').insert({
             user_id: user.id,
@@ -436,6 +452,8 @@ function FeedbackReport({
               title="Pacing & Tempo" 
               score={analysis.deliveryAnalysis.pacing.score} 
               feedback={analysis.deliveryAnalysis.pacing.feedback} 
+              // Force WPM to match the calculated stats bar
+              customMetric={`${statsWpm} WPM`}
             />
             
             <div style={styles.fillerBreakdown}>
@@ -783,6 +801,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '4px',
     fontSize: '0.8rem',
     fontWeight: 700,
+  },
+  customMetricBadge: {
+    background: '#f3f4f6',
+    color: '#374151',
+    padding: '2px 8px',
+    borderRadius: '4px',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    border: '1px solid #e5e7eb',
   },
   analysisScore: {
     display: 'flex',

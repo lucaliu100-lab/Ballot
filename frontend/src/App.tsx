@@ -29,6 +29,7 @@ import { FlowStep, RoundData, UploadResponse, DebateAnalysis } from './types';
 // Import all screen components
 import Login from './components/Login';
 import UpdatePassword from './components/UpdatePassword';
+import LandingPage from './components/LandingPage';
 import StartScreen from './components/StartScreen';
 import ThemePreview from './components/ThemePreview';
 import QuoteSelection from './components/QuoteSelection';
@@ -47,6 +48,8 @@ function App() {
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [showPasswordReset, setShowPasswordReset] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [initialAuthView, setInitialAuthView] = useState<'sign_in' | 'sign_up'>('sign_in');
 
   useEffect(() => {
     // Check active sessions and sets the user
@@ -424,9 +427,28 @@ function App() {
     );
   }
 
-  // Show login screen if not authenticated
+  // Show login screen or landing page if not authenticated
   if (!user) {
-    return <Login />;
+    if (showLogin) {
+      return (
+        <Login 
+          initialView={initialAuthView} 
+          onBack={() => setShowLogin(false)} 
+        />
+      );
+    }
+    return (
+      <LandingPage
+        onStart={() => {
+          setInitialAuthView('sign_in');
+          setShowLogin(true);
+        }}
+        onSignIn={() => {
+          setInitialAuthView('sign_in');
+          setShowLogin(true);
+        }}
+      />
+    );
   }
 
   // Show Password Reset screen if the user is in recovery mode

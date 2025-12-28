@@ -10,14 +10,17 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-type AuthView = 'sign_in' | 'sign_up' | 'forgot_password';
+interface LoginProps {
+  initialView?: AuthView;
+  onBack?: () => void;
+}
 
-function Login() {
+function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   // ===========================================
   // STATE
   // ===========================================
   
-  const [view, setView] = useState<AuthView>('sign_in');
+  const [view, setView] = useState<AuthView>(initialView);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -154,6 +157,11 @@ function Login() {
 
   return (
     <div style={styles.container}>
+      {onBack && (
+        <button onClick={onBack} style={styles.backButton}>
+          ← Back
+        </button>
+      )}
       <div style={styles.header}>
         <h1 style={styles.title}>Speech Practice</h1>
         <p style={styles.subtitle}>
@@ -328,6 +336,18 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '80px 24px',
     background: '#ffffff',
     alignItems: 'center',
+    position: 'relative',
+  },
+  backButton: {
+    position: 'absolute',
+    top: '32px',
+    left: '32px',
+    background: 'none',
+    border: 'none',
+    color: '#666',
+    cursor: 'pointer',
+    fontSize: '0.9rem',
+    fontWeight: 500,
   },
   header: {
     marginBottom: '40px',
