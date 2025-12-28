@@ -77,6 +77,7 @@ export const STEP_LABELS: Record<FlowStep, string> = {
   'record': 'Record',
   'processing': 'Analyzing',
   'report': 'Feedback',
+  'ballot': 'Ballot',
 };
 
 /** Ordered list of flow steps */

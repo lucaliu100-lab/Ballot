@@ -1,120 +1,289 @@
 /**
  * Login Component
  * 
- * Handles user authentication using InstantDB's magic link (email code) flow:
- * 1. User enters their email
- * 2. InstantDB sends a verification code to their email
- * 3. User enters the code to log in
- * 
- * This creates a user account automatically if one doesn't exist.
+ * Supports:
+ * 1. OAuth (Google, Microsoft)
+ * 2. Email/Password (Sign In, Sign Up)
+ * 3. Password Reset (Forgot Password)
  */
 
 import { useState } from 'react';
-import { db } from '../lib/instant';
+import { supabase } from '../lib/supabase';
+
+type AuthView = 'sign_in' | 'sign_up' | 'forgot_password';
 
 function Login() {
   // ===========================================
   // STATE
   // ===========================================
   
+  const [view, setView] = useState<AuthView>('sign_in');
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [codeSent, setCodeSent] = useState(false);
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   // ===========================================
   // HANDLERS
   // ===========================================
 
-  /**
-   * Send the magic code to the user's email
-   */
-  const handleSendCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!email.trim()) {
-      setError('Please enter your email address');
-      return;
+  const handleGoogleLogin = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin }
+      });
+      if (error) throw error;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sign in with Google');
     }
+  };
 
+  /* Microsoft login temporarily disabled
+  const handleMicrosoftLogin = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'azure', 
+        options: {
+          scopes: 'email',
+          redirectTo: window.location.origin,
+        },
+      });
+      if (error) throw error;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sign in with Microsoft');
+    }
+  };
+  */
+
+  const handleEmailPasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) return setError('Please fill in all fields');
+    
     setIsLoading(true);
     setError(null);
-
     try {
-      await db.auth.sendMagicCode({ email: email.trim() });
-      setCodeSent(true);
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
     } catch (err) {
-      console.error('Failed to send code:', err);
-      setError(err instanceof Error ? err.message : 'Failed to send verification code');
+      setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
       setIsLoading(false);
     }
   };
 
-  /**
-   * Verify the code and log the user in
-   */
-  const handleVerifyCode = async (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email || !password) return setError('Please fill in all fields');
     
-    if (!code.trim()) {
-      setError('Please enter the verification code');
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
-
     try {
-      await db.auth.signInWithMagicCode({ email: email.trim(), code: code.trim() });
-      // On success, the auth state will update automatically
-      // and App.tsx will render the main app instead of Login
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+      if (error) throw error;
+      
+      // If auto-confirm is on, session will be present
+      if (data.session) {
+        // App.tsx will detect the session change and log us in automatically
+        return; 
+      }
+
+      // If we get here, it means Supabase is still waiting for email confirmation
+      setMessage('Account created, but Supabase requires email confirmation. Please go to your Supabase Dashboard -> Auth -> Providers -> Email and disable "Confirm email".');
+      setView('sign_in');
     } catch (err) {
-      console.error('Failed to verify code:', err);
-      setError(err instanceof Error ? err.message : 'Invalid or expired code');
+      setError(err instanceof Error ? err.message : 'Sign up failed');
     } finally {
       setIsLoading(false);
     }
   };
 
-  /**
-   * Go back to email entry (if user wants to change email)
-   */
-  const handleChangeEmail = () => {
-    setCodeSent(false);
-    setCode('');
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) return setError('Please enter your email address');
+
+    setIsLoading(true);
     setError(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/update-password`,
+      });
+      if (error) throw error;
+      setMessage('Password reset link sent! Check your email.');
+      setView('sign_in');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send reset email');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // ===========================================
-  // RENDER
+  // RENDER HELPERS
   // ===========================================
+
+  const renderOAuthButtons = () => (
+    <>
+      <button
+        type="button"
+        onClick={handleGoogleLogin}
+        style={styles.oauthButton}
+      >
+        <img src="https://www.google.com/favicon.ico" alt="Google" style={styles.oauthIcon} />
+        Sign in with Google
+      </button>
+      {/* 
+      <button
+        type="button"
+        onClick={handleMicrosoftLogin}
+        style={styles.oauthButton}
+      >
+        <svg style={styles.oauthIcon} viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>
+        Sign in with Microsoft
+      </button>
+      */}
+    </>
+  );
 
   return (
     <div style={styles.container}>
-      {/* Header */}
       <div style={styles.header}>
         <h1 style={styles.title}>Speech Practice</h1>
         <p style={styles.subtitle}>
-          {codeSent 
-            ? 'Check your email for a verification code'
-            : 'Sign in to track your practice sessions'
-          }
+          {view === 'sign_up' ? 'Create a new account' : 
+           view === 'forgot_password' ? 'Reset your password' : 
+           'Sign in to track your progress'}
         </p>
       </div>
 
       <div style={styles.formContainer}>
-        {/* Error message */}
-        {error && (
-          <div style={styles.errorBox}>
-            {error}
-          </div>
+        {error && <div style={styles.errorBox}>{error}</div>}
+        {message && <div style={styles.messageBox}>{message}</div>}
+
+        {/* VIEW: SIGN IN */}
+        {view === 'sign_in' && (
+          <>
+            {renderOAuthButtons()}
+            
+            <div style={styles.divider}>
+              <div style={styles.dividerLine} />
+              <span style={styles.dividerText}>OR</span>
+              <div style={styles.dividerLine} />
+            </div>
+
+            <form onSubmit={handleEmailPasswordLogin} style={styles.form}>
+              <label style={styles.label}>Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                style={styles.input}
+                disabled={isLoading}
+              />
+              <label style={styles.label}>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                style={styles.input}
+                disabled={isLoading}
+              />
+              <div style={{ textAlign: 'right', marginTop: '-8px' }}>
+                <button 
+                  type="button" 
+                  onClick={() => { setView('forgot_password'); setError(null); }}
+                  style={styles.linkButton}
+                >
+                  Forgot password?
+                </button>
+              </div>
+              <button 
+                type="submit" 
+                style={styles.primaryButton}
+                disabled={isLoading}
+              >
+                {isLoading ? 'Signing in...' : 'Sign In'}
+              </button>
+            </form>
+
+            <p style={styles.footerText}>
+              Don't have an account?{' '}
+              <button 
+                onClick={() => { setView('sign_up'); setError(null); }}
+                style={styles.linkButtonBold}
+              >
+                Sign up
+              </button>
+            </p>
+          </>
         )}
 
-        {/* Email form (step 1) */}
-        {!codeSent && (
-          <form onSubmit={handleSendCode} style={styles.form}>
+        {/* VIEW: SIGN UP */}
+        {view === 'sign_up' && (
+          <>
+            {renderOAuthButtons()}
+            
+            <div style={styles.divider}>
+              <div style={styles.dividerLine} />
+              <span style={styles.dividerText}>OR</span>
+              <div style={styles.dividerLine} />
+            </div>
+
+            <form onSubmit={handleSignUp} style={styles.form}>
+              <label style={styles.label}>Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                style={styles.input}
+                disabled={isLoading}
+              />
+              <label style={styles.label}>Create Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                style={styles.input}
+                disabled={isLoading}
+              />
+              <button 
+                type="submit" 
+                style={styles.primaryButton}
+                disabled={isLoading}
+              >
+                {isLoading ? 'Creating Account...' : 'Sign Up'}
+              </button>
+            </form>
+
+            <p style={styles.footerText}>
+              Already have an account?{' '}
+              <button 
+                onClick={() => { setView('sign_in'); setError(null); }}
+                style={styles.linkButtonBold}
+              >
+                Sign in
+              </button>
+            </p>
+          </>
+        )}
+
+        {/* VIEW: FORGOT PASSWORD */}
+        {view === 'forgot_password' && (
+          <form onSubmit={handleResetPassword} style={styles.form}>
+            <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '16px' }}>
+              Enter your email address and we'll send you a link to reset your password.
+            </p>
             <label style={styles.label}>Email Address</label>
             <input
               type="email"
@@ -123,66 +292,25 @@ function Login() {
               placeholder="you@example.com"
               style={styles.input}
               disabled={isLoading}
-              autoFocus
             />
             <button 
               type="submit" 
-              style={styles.button}
-              disabled={isLoading || !email.trim()}
-            >
-              {isLoading ? 'Sending...' : 'Send Verification Code'}
-            </button>
-          </form>
-        )}
-
-        {/* Code verification form (step 2) */}
-        {codeSent && (
-          <form onSubmit={handleVerifyCode} style={styles.form}>
-            <div style={styles.emailSentTo}>
-              Code sent to: <strong>{email}</strong>
-              <button 
-                type="button"
-                onClick={handleChangeEmail}
-                style={styles.changeEmailButton}
-              >
-                Change
-              </button>
-            </div>
-            
-            <label style={styles.label}>Verification Code</label>
-            <input
-              type="text"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="Enter 6-digit code"
-              style={styles.input}
+              style={styles.primaryButton}
               disabled={isLoading}
-              autoFocus
-              maxLength={6}
-            />
-            <button 
-              type="submit" 
-              style={styles.button}
-              disabled={isLoading || !code.trim()}
             >
-              {isLoading ? 'Verifying...' : 'Sign In'}
+              {isLoading ? 'Sending...' : 'Send Reset Link'}
             </button>
             
-            <button
+            <button 
               type="button"
-              onClick={handleSendCode}
-              style={styles.resendButton}
+              onClick={() => { setView('sign_in'); setError(null); }}
+              style={styles.secondaryButton}
               disabled={isLoading}
             >
-              Resend Code
+              Back to Sign In
             </button>
           </form>
         )}
-
-        {/* Footer info */}
-        <p style={styles.footerText}>
-          By signing in, you can save your practice sessions and track your improvement over time.
-        </p>
       </div>
     </div>
   );
@@ -197,15 +325,17 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     minHeight: '100vh',
-    padding: '80px 48px 120px 48px',
+    padding: '80px 24px',
     background: '#ffffff',
+    alignItems: 'center',
   },
   header: {
-    marginBottom: '48px',
+    marginBottom: '40px',
+    textAlign: 'center',
   },
   title: {
     color: '#111111',
-    fontSize: '3rem',
+    fontSize: '2.5rem',
     margin: '0 0 12px 0',
     fontWeight: 700,
     letterSpacing: '-0.02em',
@@ -214,19 +344,28 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#666666',
     fontSize: '1.1rem',
     margin: 0,
-    lineHeight: 1.5,
   },
   formContainer: {
+    width: '100%',
     maxWidth: '400px',
   },
   errorBox: {
     background: '#fef2f2',
     border: '1px solid #dc2626',
     color: '#dc2626',
-    padding: '16px',
+    padding: '12px',
     borderRadius: '8px',
-    marginBottom: '24px',
-    fontSize: '0.95rem',
+    marginBottom: '20px',
+    fontSize: '0.9rem',
+  },
+  messageBox: {
+    background: '#f0fdf4',
+    border: '1px solid #16a34a',
+    color: '#16a34a',
+    padding: '12px',
+    borderRadius: '8px',
+    marginBottom: '20px',
+    fontSize: '0.9rem',
   },
   form: {
     display: 'flex',
@@ -235,72 +374,102 @@ const styles: Record<string, React.CSSProperties> = {
   },
   label: {
     color: '#333333',
-    fontSize: '0.95rem',
-    textAlign: 'left',
-    marginBottom: '-8px',
+    fontSize: '0.9rem',
     fontWeight: 500,
+    marginBottom: '-8px',
   },
   input: {
     background: '#ffffff',
-    border: '2px solid #000000',
+    border: '1px solid #e5e5e5',
     borderRadius: '8px',
-    padding: '14px 16px',
+    padding: '12px 16px',
     fontSize: '1rem',
     color: '#111111',
     outline: 'none',
-    transition: 'border-color 0.2s ease',
+    transition: 'border-color 0.2s',
   },
-  button: {
+  primaryButton: {
     background: '#000000',
     color: '#ffffff',
-    border: '2px solid #000000',
-    padding: '16px 24px',
+    border: 'none',
+    padding: '14px',
     fontSize: '1rem',
     fontWeight: 600,
     borderRadius: '8px',
     cursor: 'pointer',
-    transition: 'all 0.2s ease',
     marginTop: '8px',
   },
-  emailSentTo: {
-    color: '#333333',
-    fontSize: '0.95rem',
-    padding: '16px',
-    background: '#fafafa',
+  secondaryButton: {
+    background: 'transparent',
+    color: '#000000',
     border: '1px solid #e5e5e5',
+    padding: '14px',
+    fontSize: '1rem',
+    fontWeight: 500,
     borderRadius: '8px',
+    cursor: 'pointer',
+  },
+  oauthButton: {
+    background: '#ffffff',
+    color: '#333333',
+    border: '1px solid #e5e5e5',
+    padding: '12px',
+    fontSize: '0.95rem',
+    fontWeight: 500,
+    borderRadius: '8px',
+    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '8px',
-    flexWrap: 'wrap',
+    gap: '12px',
+    width: '100%',
+    marginBottom: '12px',
   },
-  changeEmailButton: {
-    background: 'transparent',
-    border: 'none',
-    color: '#000000',
-    cursor: 'pointer',
-    fontSize: '0.9rem',
-    textDecoration: 'underline',
-    padding: '0 4px',
+  oauthIcon: {
+    width: '20px',
+    height: '20px',
   },
-  resendButton: {
-    background: '#ffffff',
-    border: '2px solid #000000',
-    color: '#333333',
-    padding: '12px 20px',
-    fontSize: '0.95rem',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
+  divider: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    margin: '24px 0',
+  },
+  dividerLine: {
+    flex: 1,
+    height: '1px',
+    background: '#e5e5e5',
+  },
+  dividerText: {
+    color: '#999',
+    fontSize: '0.85rem',
+    fontWeight: 500,
   },
   footerText: {
-    color: '#666666',
+    textAlign: 'center',
+    color: '#666',
+    fontSize: '0.9rem',
+    marginTop: '24px',
+  },
+  linkButton: {
+    background: 'none',
+    border: 'none',
+    color: '#666',
     fontSize: '0.85rem',
-    marginTop: '32px',
-    lineHeight: 1.5,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    padding: 0,
+  },
+  linkButtonBold: {
+    background: 'none',
+    border: 'none',
+    color: '#000',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    padding: 0,
   },
 };
 
 export default Login;
-

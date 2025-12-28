@@ -17,8 +17,7 @@
  */
 
 import { useEffect, useRef, useMemo, useState } from 'react';
-import { id } from '@instantdb/react';
-import { db } from '../lib/instant';
+import { supabase } from '../lib/supabase';
 import { DebateAnalysis } from '../types';
 
 // Helper to get color based on score
@@ -52,6 +51,7 @@ interface FeedbackReportProps {
   onNewRound: () => void;     // Start fresh with new theme
   onGoHome: () => void;       // Return to homepage
   backLabel?: string;         // Optional custom label for back button
+  readOnly?: boolean;         // If true, do not save to database (for viewing history)
 }
 
 // Helper to parse the technical feedback string into structured parts
@@ -190,6 +190,7 @@ function FeedbackReport({
   onNewRound,
   onGoHome,
   backLabel = "← Back to Dashboard",
+  readOnly = false,
 }: FeedbackReportProps) {
   // Track if we've already saved this session
   const savedRef = useRef(false);
@@ -209,8 +210,8 @@ function FeedbackReport({
     const saveKey = `saved_session_${sessionId}`;
     
     // Check if already saved (both in ref and sessionStorage for page refresh protection)
-    if (savedRef.current || sessionStorage.getItem(saveKey)) {
-      console.log('📝 Skipping save - already saved');
+    if (savedRef.current || sessionStorage.getItem(saveKey) || readOnly) {
+      console.log('📝 Skipping save - already saved or read-only');
       return;
     }
     
@@ -220,50 +221,58 @@ function FeedbackReport({
       return;
     }
 
-    // Save the session to InstantDB
+    // Save the session to Supabase
     const saveSession = async () => {
       try {
-        console.log('💾 Saving session to InstantDB...');
+        console.log('💾 Saving session to Supabase...');
         
-        db.transact(
-          db.tx.sessions[id()].update({
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (!user) {
+           console.error('No user found, cannot save session');
+           return;
+        }
+
+        const { error } = await supabase.from('sessions').insert({
+            user_id: user.id,
             theme,
             quote,
             transcript,
             // Competitive scores
-            overallScore: analysis.overallScore,
-            contentScore: analysis.categoryScores.content.score,
-            deliveryScore: analysis.categoryScores.delivery.score,
-            languageScore: analysis.categoryScores.language.score,
-            bodyLanguageScore: analysis.categoryScores.bodyLanguage.score,
+            overall_score: analysis.overallScore,
+            content_score: analysis.categoryScores.content.score,
+            delivery_score: analysis.categoryScores.delivery.score,
+            language_score: analysis.categoryScores.language.score,
+            body_language_score: analysis.categoryScores.bodyLanguage.score,
             // Stats
             duration: analysis.speechStats.duration,
-            wordCount: analysis.speechStats.wordCount,
+            word_count: analysis.speechStats.wordCount,
             wpm: analysis.speechStats.wpm,
-            fillerWordCount: analysis.speechStats.fillerWordCount,
+            filler_word_count: analysis.speechStats.fillerWordCount,
             // Feedback
-            performanceTier: analysis.performanceTier,
-            tournamentReady: analysis.tournamentReady,
+            performance_tier: analysis.performanceTier,
+            tournament_ready: analysis.tournamentReady,
             strengths: analysis.strengths,
-            practiceDrill: analysis.practiceDrill,
+            practice_drill: analysis.practiceDrill,
             // Meta
-            videoFilename,
-            createdAt: sessionCreatedAt.current,
+            video_filename: videoFilename,
+            created_at: new Date(sessionCreatedAt.current).toISOString(),
             // Store full analysis as JSON string for future-proofing
-            fullAnalysisJson: JSON.stringify(analysis),
-          })
-        );
+            full_analysis_json: JSON.stringify(analysis),
+        });
+
+        if (error) throw error;
 
         savedRef.current = true;
         sessionStorage.setItem(saveKey, 'true');
-        console.log('✅ Session saved to InstantDB');
+        console.log('✅ Session saved to Supabase');
       } catch (error) {
         console.error('❌ Failed to save session:', error);
       }
     };
 
     saveSession();
-  }, [sessionId, analysis, theme, quote, transcript, videoFilename, isMock]);
+  }, [sessionId, analysis, theme, quote, transcript, videoFilename, isMock, readOnly]);
 
   // Helper to render a score circle
   const renderScoreRing = (score: number, label: string, weight: string) => {

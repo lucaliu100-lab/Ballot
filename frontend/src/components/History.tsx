@@ -7,8 +7,8 @@
  * - Bottom Section: Priority Improvements (Left, Sticky) + Recent Rounds List (Right)
  */
 
-import { useMemo } from 'react';
-import { db } from '../lib/instant';
+import { useMemo, useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import { formatDate } from '../lib/utils';
 import {
   LineChart,
@@ -80,19 +80,114 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   // DATA FETCHING
   // ===========================================
 
-  const { isLoading, error, data } = db.useQuery({ sessions: {} });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sessionsData, setSessionsData] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setIsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('sessions')
+          .select('*')
+          .order('created_at', { ascending: true });
+        
+        if (error) throw error;
+
+        // Map snake_case to camelCase for compatibility
+        const mapped = (data || []).map(s => ({
+          id: s.id,
+          theme: s.theme,
+          quote: s.quote,
+          transcript: s.transcript,
+          createdAt: new Date(s.created_at).getTime(),
+          overallScore: s.overall_score,
+          contentScore: s.content_score,
+          deliveryScore: s.delivery_score,
+          languageScore: s.language_score,
+          bodyLanguageScore: s.body_language_score,
+          duration: s.duration,
+          wordCount: s.word_count,
+          wpm: s.wpm,
+          fillerCount: s.filler_word_count, // Component uses fillerCount or fillerWordCount
+          fillerWordCount: s.filler_word_count,
+          performanceTier: s.performance_tier,
+          tournamentReady: s.tournament_ready,
+          strengths: s.strengths,
+          practiceDrill: s.practice_drill,
+          videoFilename: s.video_filename,
+          fullAnalysisJson: s.full_analysis_json
+        }));
+        
+        setSessionsData(mapped);
+      } catch (err) {
+        console.error(err);
+        setError('Failed to load history');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   // ===========================================
   // DATA PROCESSING & METRICS
   // ===========================================
 
   const sessions = useMemo(() => {
-    return data?.sessions 
-      ? [...data.sessions].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-      : [];
-  }, [data]);
+    return sessionsData;
+  }, [sessionsData]);
 
   const sessionsForList = useMemo(() => [...sessions].reverse(), [sessions]);
+
+  // DUPLICATE DETECTION AND CLEANUP
+  const [duplicateIds, setDuplicateIds] = useState<string[]>([]);
+  const [isCleaning, setIsCleaning] = useState(false);
+
+  useEffect(() => {
+    if (!sessions.length) return;
+
+    const uniqueKeys = new Map<string, any>(); // key -> oldest session
+    const dupeIds: string[] = [];
+
+    // Process sorted sessions (oldest first due to previous sort)
+    sessions.forEach(session => {
+       // Create a unique key based on content
+       // Use theme, quote, and transcript snippet
+       const key = `${session.theme}-${session.quote}-${(session.transcript || '').substring(0, 50)}`;
+       
+       if (uniqueKeys.has(key)) {
+         // This is a duplicate (since we are iterating oldest to newest)
+         dupeIds.push(session.id);
+       } else {
+         uniqueKeys.set(key, session);
+       }
+    });
+
+    setDuplicateIds(dupeIds);
+  }, [sessions]);
+
+  const handleCleanup = async () => {
+     if (!duplicateIds.length) return;
+     if (!confirm(`Delete ${duplicateIds.length} duplicate sessions?`)) return;
+     
+     setIsCleaning(true);
+     try {
+       // Batch delete
+       const { error } = await supabase.from('sessions').delete().in('id', duplicateIds);
+       if (error) throw error;
+       
+       // Update local state to remove deleted
+       setSessionsData(prev => prev.filter(s => !duplicateIds.includes(s.id)));
+       setDuplicateIds([]);
+     } catch (e) {
+       console.error("Cleanup failed", e);
+       alert("Failed to cleanup duplicates");
+     } finally {
+       setIsCleaning(false);
+     }
+  };
 
   // Helper: Get Avg Score
   const getSessionAvgScore = (session: any): number => {
@@ -111,7 +206,7 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   
   // 2. Metric: Consistency (Based on Std Dev)
   const stdDev = calculateStdDev(scores);
-  const consistencyScore = Math.max(0, Math.min(100, Math.round(100 - (stdDev * 20)))); 
+  let consistencyScore = Math.max(0, Math.min(100, Math.round(100 - (stdDev * 20)))); 
   let consistencyLabel = "LOW";
   let consistencyColor = "#dc2626"; // red
   if (consistencyScore >= 85) { consistencyLabel = "HIGH"; consistencyColor = "#059669"; } // green
@@ -208,7 +303,16 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     const counts: Record<string, { count: number; impact: string; action: string; originalTitle: string }> = {};
 
     sessions.forEach(s => {
-      const analysis = s.fullAnalysisJson;
+      let analysis: any = s.fullAnalysisJson;
+      // Handle stringified JSON if necessary
+      if (typeof analysis === 'string') {
+        try {
+          analysis = JSON.parse(analysis);
+        } catch (e) {
+          analysis = null;
+        }
+      }
+
       if (analysis?.priorityImprovements) {
         analysis.priorityImprovements.forEach((pi: any) => {
           // Normalize issue text to group similar ones
@@ -350,6 +454,25 @@ function History({ onClose, onSelectSession }: HistoryProps) {
       <div style={styles.header}>
         <div style={styles.headerTopRow}>
            <button onClick={onClose} style={styles.backButton} className="hover-link">← Back to Dashboard</button>
+           {duplicateIds.length > 0 && (
+             <button 
+               onClick={handleCleanup} 
+               disabled={isCleaning}
+               style={{
+                 marginLeft: 'auto',
+                 background: '#fee2e2',
+                 color: '#dc2626',
+                 border: '1px solid #fecaca',
+                 padding: '6px 12px',
+                 borderRadius: '6px',
+                 fontSize: '0.85rem',
+                 fontWeight: 600,
+                 cursor: isCleaning ? 'wait' : 'pointer'
+               }}
+             >
+               {isCleaning ? 'Cleaning...' : `Remove ${duplicateIds.length} Duplicates`}
+             </button>
+           )}
         </div>
         <h1 style={styles.title}>Performance History</h1>
         <p style={styles.subtitle}>Detailed analysis of your competitive progress</p>

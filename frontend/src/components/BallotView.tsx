@@ -6,8 +6,8 @@
  * Acts as a page wrapper around FeedbackReport with added navigation.
  */
 
-import { useMemo } from 'react';
-import { db } from '../lib/instant';
+import { useMemo, useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
 import FeedbackReport from './FeedbackReport';
 import { DebateAnalysis } from '../types';
 
@@ -21,16 +21,57 @@ interface BallotViewProps {
 
 function BallotView({ sessionId, onGoHome, onRedoRound, onNewRound, onNavigate }: BallotViewProps) {
   // Fetch ALL sessions to determine navigation order and find current
-  const { isLoading, error, data } = db.useQuery({ 
-    sessions: {} 
-  });
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Sort sessions by date (newest first, consistent with History list)
-  const sessions = useMemo(() => {
-      return data?.sessions 
-        ? [...data.sessions].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-        : [];
-  }, [data]);
+  useEffect(() => {
+    const fetchSessions = async () => {
+      setIsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('sessions')
+          .select('*')
+          .order('created_at', { ascending: false }); // Newest first
+
+        if (error) throw error;
+
+        // Map snake_case to camelCase
+        const mapped = (data || []).map(s => ({
+          id: s.id,
+          theme: s.theme,
+          quote: s.quote,
+          transcript: s.transcript,
+          createdAt: new Date(s.created_at).getTime(),
+          overallScore: s.overall_score,
+          contentScore: s.content_score,
+          deliveryScore: s.delivery_score,
+          languageScore: s.language_score,
+          bodyLanguageScore: s.body_language_score,
+          duration: s.duration,
+          wordCount: s.word_count,
+          wpm: s.wpm,
+          fillerCount: s.filler_word_count,
+          fillerWordCount: s.filler_word_count,
+          performanceTier: s.performance_tier,
+          tournamentReady: s.tournament_ready,
+          strengths: s.strengths,
+          practiceDrill: s.practice_drill,
+          videoFilename: s.video_filename,
+          fullAnalysisJson: s.full_analysis_json
+        }));
+
+        setSessions(mapped);
+      } catch (err) {
+        console.error('Error loading sessions:', err);
+        setError('Failed to load sessions');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchSessions();
+  }, []);
 
   // Find current session index
   const currentIndex = sessions.findIndex(s => s.id === sessionId);
@@ -123,6 +164,7 @@ function BallotView({ sessionId, onGoHome, onRedoRound, onNewRound, onNavigate }
         onRedoRound={onRedoRound}
         onNewRound={onNewRound}
         backLabel="← Back to History"
+        readOnly={true}
       />
 
       {/* Floating Navigation Controls */}

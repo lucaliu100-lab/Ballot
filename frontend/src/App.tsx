@@ -16,8 +16,8 @@
 
 import { useEffect, useState } from 'react';
 
-// Import InstantDB
-import { db } from './lib/instant';
+// Import Supabase
+import { supabase } from './lib/supabase';
 
 // Import shared utilities and constants
 import { PREP_TIMER_DURATION, API_ENDPOINTS } from './lib/constants';
@@ -28,6 +28,7 @@ import { FlowStep, RoundData, UploadResponse, DebateAnalysis } from './types';
 
 // Import all screen components
 import Login from './components/Login';
+import UpdatePassword from './components/UpdatePassword';
 import StartScreen from './components/StartScreen';
 import ThemePreview from './components/ThemePreview';
 import QuoteSelection from './components/QuoteSelection';
@@ -43,7 +44,28 @@ function App() {
   // AUTHENTICATION
   // ==========================================
   
-  const { isLoading: authLoading, user, error: authError } = db.useAuth();
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
+
+  useEffect(() => {
+    // Check active sessions and sets the user
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    // Listen for changes on auth state (logged in, signed out, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setShowPasswordReset(true);
+      }
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // ==========================================
   // STATE MANAGEMENT
@@ -407,9 +429,9 @@ function App() {
     return <Login />;
   }
 
-  // Show error if auth failed (but user can still try to use app)
-  if (authError) {
-    console.error('Auth error:', authError);
+  // Show Password Reset screen if the user is in recovery mode
+  if (showPasswordReset) {
+    return <UpdatePassword onSuccess={() => setShowPasswordReset(false)} />;
   }
 
   // ==========================================
@@ -441,7 +463,7 @@ function App() {
         </button>
         <span style={styles.userEmail}>{user.email}</span>
         <button 
-          onClick={() => db.auth.signOut()} 
+          onClick={() => supabase.auth.signOut()} 
           style={styles.signOutButton}
         >
           Sign Out
