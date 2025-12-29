@@ -249,10 +249,17 @@ function RecordScreen({
     chunksRef.current = [];
 
     // Create MediaRecorder with the stream
-    // Try to use webm format (supported by most browsers)
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
+    // Try to use webm format with explicit audio codec (opus)
+    let mimeType = 'video/webm';
+    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+      mimeType = 'video/webm;codecs=vp9,opus'; // VP9 video + Opus audio
+    } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
+      mimeType = 'video/webm;codecs=vp8,opus'; // VP8 video + Opus audio (wider support)
+    } else if (MediaRecorder.isTypeSupported('video/webm;codecs=opus')) {
+      mimeType = 'video/webm;codecs=opus'; // Fallback: just ensure opus audio
+    }
+    
+    console.log(`🎥 Recording with MIME type: ${mimeType}`);
 
     const mediaRecorder = new MediaRecorder(streamRef.current, {
       mimeType,
@@ -267,9 +274,29 @@ function RecordScreen({
     };
 
     // Event handler: called when recording stops
-    mediaRecorder.onstop = () => {
+    mediaRecorder.onstop = async () => {
       // Combine all chunks into a single blob
       const blob = new Blob(chunksRef.current, { type: mimeType });
+      
+      // CRITICAL: Verify the recorded blob actually has audio before proceeding
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+        
+        // Check file size - audio+video should be at least ~50KB even for very short recordings
+        if (arrayBuffer.byteLength < 50000) {
+          // File is suspiciously small (likely video-only or corrupted)
+          console.error('❌ Recorded file is too small:', (arrayBuffer.byteLength / 1024).toFixed(1), 'KB');
+          setError('⚠️ Recording failed: Audio was not captured. This can happen with certain browsers/devices. Please try: 1) Use Chrome/Edge instead of Safari, 2) Check System Settings → Privacy → Microphone, 3) Refresh page and try again.');
+          setRecordingState('idle');
+          return;
+        }
+        
+        console.log(`✅ Recording validated: ${(arrayBuffer.byteLength / 1024).toFixed(1)} KB`);
+      } catch (validationError) {
+        console.error('⚠️ Could not validate recording:', validationError);
+        // Continue anyway - validation is best-effort
+      }
+      
       setRecordedBlob(blob);
       
       // Create a URL for preview

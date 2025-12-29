@@ -954,17 +954,24 @@ export async function analyzeSpeechWithGemini(
     }
 
     // Inspect streams to validate that the recording actually has audio.
-    const streamInfo = await getMediaStreamInfo(videoPathForAnalysis).catch(() => null);
+    const streamInfo = await getMediaStreamInfo(videoPathForAnalysis).catch((e) => {
+      console.error('⚠️ getMediaStreamInfo failed:', e instanceof Error ? e.message : String(e));
+      return null;
+    });
+    
     if (streamInfo) {
       console.log(
         `   🎛️ Streams: audio=${streamInfo.hasAudio ? `yes(${streamInfo.audioCodec || 'unknown'})` : 'no'} ` +
           `video=${streamInfo.hasVideo ? `yes(${streamInfo.videoCodec || 'unknown'})` : 'no'}`
       );
+    } else {
+      console.warn('⚠️ Could not determine stream info - will attempt transcription anyway');
     }
 
     if (streamInfo && !streamInfo.hasAudio) {
       const reason = 'No audio stream detected in recording (microphone permissions or browser recording settings).';
-      console.warn(`⚠️ Insufficient speech detected. Returning guarded analysis. Reason: ${reason}`);
+      console.error(`❌ BLOCKING: ${reason}`);
+      console.error(`   Video file: ${path.basename(videoPathForAnalysis)}, size: ${originalSizeMb.toFixed(2)} MB`);
       return {
         success: true,
         transcript: '',
