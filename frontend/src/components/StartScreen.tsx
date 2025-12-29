@@ -80,11 +80,11 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
     const fetchDashboardData = async () => {
       if (!supabase) return;
       // Fetch sessions
-      // We filter by word_count > 10 to get a more accurate count of "completed" attempts
+      // Filter by word_count >= 25 to match what's shown in history (excludes insufficient sessions)
       const { data: sessions, count } = await supabase
         .from('sessions')
         .select('*', { count: 'exact' })
-        .gt('word_count', 10)
+        .gte('word_count', 25)
         .order('created_at', { ascending: false })
         .limit(20);
 
