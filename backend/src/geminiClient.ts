@@ -599,7 +599,8 @@ async function callOpenRouterJson(params: {
   const { apiKey, model, content, maxTokens } = params;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300000);
+  // Frontend timeout is 5 minutes; keep backend under that even with retry work.
+  const timeoutId = setTimeout(() => controller.abort(), 240000);
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -716,7 +717,8 @@ async function callOpenRouterJson(params: {
 
   // One retry: ask the model to resend valid JSON only (escape newlines as \\n).
   const retryController = new AbortController();
-  const retryTimeout = setTimeout(() => retryController.abort(), 300000);
+  // Retry should be fast; it's only for formatting correction.
+  const retryTimeout = setTimeout(() => retryController.abort(), 90000);
   const retryResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -745,7 +747,9 @@ async function callOpenRouterJson(params: {
   clearTimeout(retryTimeout);
   if (!retryResp.ok) {
     const errorText = await retryResp.text().catch(() => 'No error body');
-    throw new Error(`OpenRouter ${retryResp.status}: retry parse failed`);
+    const err = new Error(`OpenRouter ${retryResp.status}: retry parse failed`);
+    (err as any).cause = errorText;
+    throw err;
   }
   const retryData = await retryResp.json();
   const retryText = retryData.choices?.[0]?.message?.content;
@@ -1482,9 +1486,9 @@ Each feedback string MUST follow this exact markdown template (always include al
 **Score Justification:** 2–4 sentences summarizing what the speaker did and their level (novice/developing/varsity/national).
 
 **Evidence from Speech:**
-- "<short quote from transcript>" [m:ss-m:ss]
-- "<short quote from transcript>" [m:ss-m:ss]
-- "<short quote from transcript>" [m:ss-m:ss]
+- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
+- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
+- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
 
 **What This Means:** 1–2 sentences explaining the competitive implication for an NSDA ballot.
 
@@ -1492,6 +1496,11 @@ Each feedback string MUST follow this exact markdown template (always include al
 1. One concrete drill or adjustment.
 2. One concrete drill or adjustment.
 3. One concrete drill or adjustment.
+
+JSON VALIDITY RULE (CRITICAL):
+- The entire response must be valid JSON.
+- Do NOT include raw line breaks or unescaped quotes inside JSON strings.
+- NEVER use the " character inside any feedback text. If you must quote the speaker, use single quotes instead.
 
 SCORING RULES:
 - ALL scores are on a 0.0–10.0 scale (one decimal max). Never use 0–100.
