@@ -206,9 +206,7 @@ function FeedbackReport({
   backLabel = "← Back to Dashboard",
   readOnly = false,
 }: FeedbackReportProps) {
-  const rubricLengthPenalty = Number((analysis as any)?.__rubric?.lengthPenalty || 0);
-  const rubricLengthPenaltyAppliedTo = String((analysis as any)?.__rubric?.lengthPenaltyAppliedTo || 'none');
-  const rubricLengthPenaltyNote = String((analysis as any)?.__rubric?.lengthPenaltyNote || '').trim();
+  const overallLengthDeduction = Number((analysis as any)?.__rubric?.overallLengthDeduction || 0);
   // Track if we've already saved this session
   const savedRef = useRef(false);
   
@@ -452,11 +450,6 @@ function FeedbackReport({
           {/* CONTENT ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
-            {rubricLengthPenalty > 0 && rubricLengthPenaltyAppliedTo === 'all' && (
-              <div style={styles.rubricNote}>
-                Length adjustment: -{rubricLengthPenalty.toFixed(1)} applied to all category averages due to sub-optimal length. {rubricLengthPenaltyNote}
-              </div>
-            )}
             <AnalysisItem 
               title="Topic Adherence" 
               score={analysis.contentAnalysis.topicAdherence.score} 
@@ -577,6 +570,11 @@ function FeedbackReport({
             <div style={{ ...styles.overallScoreValue, color: '#ca8a04' }}>
               {analysis.overallScore.toFixed(1)}<span style={styles.overallMax}>/10.0</span>
             </div>
+            {overallLengthDeduction > 0 && (
+              <div style={styles.overallDeductionNote}>
+                Deducted {overallLengthDeduction.toFixed(1)} due to suboptimal length.
+              </div>
+            )}
             <div style={styles.readinessRow}>
               Tournament Ready: <span style={{ fontWeight: 700, color: analysis.tournamentReady ? '#059669' : '#dc2626' }}>{analysis.tournamentReady ? 'YES' : 'NO'}</span>
             </div>
@@ -819,6 +817,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#6b7280',
     marginTop: '-8px',
     marginBottom: '16px',
+    lineHeight: 1.4,
+  },
+  overallDeductionNote: {
+    marginTop: '8px',
+    fontSize: '0.9rem',
+    color: '#6b7280',
     lineHeight: 1.4,
   },
   analysisItem: {

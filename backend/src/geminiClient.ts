@@ -394,13 +394,12 @@ function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): vo
     note = '⚠️ EXCEEDS LIMIT (>7:00): Time Management penalty applied.';
   }
 
-  // Stash the content penalty for later category-score recomputation (so categoryScores.content stays consistent with sub-scores).
   (analysis as any).__rubric = {
     ...(analysis as any).__rubric,
-    // For sub-optimal short speeches, apply the same penalty across all category averages
-    // to keep category scores consistent and avoid “only Content dropped” confusion.
-    lengthPenalty: contentPenalty,
-    lengthPenaltyAppliedTo: contentPenalty > 0 ? 'all' : 'none',
+    // We keep category scores as the raw averages of the displayed subscores.
+    // Apply any short-length penalty ONLY as an overall deduction so the wheels remain mathematically consistent.
+    overallLengthDeduction: contentPenalty > 0 ? round1(contentPenalty * 0.4) : 0,
+    overallLengthDeductionReason: contentPenalty > 0 ? 'suboptimal length' : '',
     lengthPenaltyNote: note,
   };
 
@@ -428,39 +427,33 @@ function computeCategoryScoresFromSubscoresInPlace(analysis: any): void {
   const cs = analysis.categoryScores;
   if (!cs || typeof cs !== 'object') return;
 
+  // IMPORTANT: These must match exactly what the UI displays in FeedbackReport:
+  // - Content: Topic Adherence, Argument Structure, Depth of Analysis (3)
+  // - Delivery: Vocal Variety, Pacing (2)
+  // - Language: Vocabulary, Rhetorical Devices (2)
+  // - Body: Eye Contact, Gestures (2)
   const contentAvg = avg([
     analysis.contentAnalysis?.topicAdherence?.score,
     analysis.contentAnalysis?.argumentStructure?.score,
     analysis.contentAnalysis?.depthOfAnalysis?.score,
-    analysis.contentAnalysis?.examplesEvidence?.score,
-    analysis.contentAnalysis?.timeManagement?.score,
   ]);
   const deliveryAvg = avg([
     analysis.deliveryAnalysis?.vocalVariety?.score,
     analysis.deliveryAnalysis?.pacing?.score,
-    analysis.deliveryAnalysis?.articulation?.score,
-    analysis.deliveryAnalysis?.fillerWords?.score,
   ]);
   const languageAvg = avg([
     analysis.languageAnalysis?.vocabulary?.score,
     analysis.languageAnalysis?.rhetoricalDevices?.score,
-    analysis.languageAnalysis?.emotionalAppeal?.score,
-    analysis.languageAnalysis?.logicalAppeal?.score,
   ]);
   const bodyAvg = avg([
     analysis.bodyLanguageAnalysis?.eyeContact?.score,
     analysis.bodyLanguageAnalysis?.gestures?.score,
-    analysis.bodyLanguageAnalysis?.posture?.score,
-    analysis.bodyLanguageAnalysis?.stagePresence?.score,
   ]);
 
-  const lengthPenalty = Number((analysis as any).__rubric?.lengthPenalty || 0);
-  const applyTo = String((analysis as any).__rubric?.lengthPenaltyAppliedTo || 'none');
-  const p = applyTo === 'all' ? lengthPenalty : 0;
-  cs.content.score = clamp(round1(contentAvg - p), 0, 10);
-  cs.delivery.score = clamp(round1(deliveryAvg - p), 0, 10);
-  cs.language.score = clamp(round1(languageAvg - p), 0, 10);
-  cs.bodyLanguage.score = clamp(round1(bodyAvg - p), 0, 10);
+  cs.content.score = clamp(round1(contentAvg), 0, 10);
+  cs.delivery.score = clamp(round1(deliveryAvg), 0, 10);
+  cs.language.score = clamp(round1(languageAvg), 0, 10);
+  cs.bodyLanguage.score = clamp(round1(bodyAvg), 0, 10);
 
   // Ensure weights and weighted totals are consistent.
   cs.content.weight = 0.4;
@@ -1683,6 +1676,14 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
     applyLengthPenaltiesInPlace(analysis, durationSecondsActual);
     // Ensure category scores are consistent with the detailed sub-scores (prevents “subscores high but category low” mismatches).
     computeCategoryScoresFromSubscoresInPlace(analysis);
+
+    // Apply any short-length penalty as an overall deduction (category wheels remain pure averages).
+    const overallLenDeduction = Number((analysis as any).__rubric?.overallLengthDeduction || 0);
+    if (overallLenDeduction > 0) {
+      analysis.overallScore = clamp(round1(analysis.overallScore - overallLenDeduction), 0, 10);
+      // Keep tier label aligned with the adjusted overall score.
+      analysis.performanceTier = computePerformanceTier(analysis.overallScore);
+    }
     enforceTournamentReadinessInPlace(
       analysis,
       durationSecondsActual,
