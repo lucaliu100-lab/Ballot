@@ -243,6 +243,120 @@ async function getVideoDurationSecondsRobust(filePath: string): Promise<number> 
   });
 }
 
+function formatTimecode(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function buildEstimatedTimecodedTranscript(transcript: string, durationSeconds: number, wordsPerChunk: number = 36): string {
+  const t = String(transcript || '').trim();
+  if (!t) return '';
+  const dur = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0;
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+
+  const chunkSize = Math.max(12, Math.floor(wordsPerChunk));
+  const totalWords = words.length;
+  const lines: string[] = [];
+
+  for (let start = 0; start < totalWords; start += chunkSize) {
+    const end = Math.min(totalWords, start + chunkSize);
+    const textChunk = words.slice(start, end).join(' ');
+
+    // Estimate time range proportional to word index.
+    const startSec = dur > 0 ? (start / totalWords) * dur : 0;
+    const endSec = dur > 0 ? (end / totalWords) * dur : 0;
+    const label = dur > 0 ? `[${formatTimecode(startSec)}-${formatTimecode(endSec)}]` : `[?:??-?:??]`;
+
+    lines.push(`${label} ${textChunk}`);
+  }
+
+  return lines.join('\n');
+}
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
+}
+
+function clamp(x: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, x));
+}
+
+function normalizeAnalysisScoringInPlace(analysis: any): void {
+  if (!analysis || typeof analysis !== 'object') return;
+
+  // Detect if model returned scores on 0–100 or 0–1 scale.
+  const collected: number[] = [];
+  const collect = (obj: any) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'score' || k === 'overallScore') {
+        if (typeof v === 'number' && Number.isFinite(v)) collected.push(v);
+      } else if (v && typeof v === 'object') {
+        collect(v);
+      }
+    }
+  };
+  collect(analysis);
+
+  const maxScore = collected.length ? Math.max(...collected) : 10;
+  const factor = maxScore > 10 ? 0.1 : (maxScore > 0 && maxScore <= 1.2 ? 10 : 1);
+
+  const norm = (v: any): number => {
+    const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+    return clamp(round1(n * factor), 0, 10);
+  };
+
+  // Normalize all nested ".score" fields.
+  const normalizeScores = (obj: any) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'score') {
+        (obj as any)[k] = norm(v);
+      } else if (v && typeof v === 'object') {
+        normalizeScores(v);
+      }
+    }
+  };
+  normalizeScores(analysis);
+
+  // Normalize overallScore separately (and then recompute from category weights for consistency).
+  analysis.overallScore = norm(analysis.overallScore);
+
+  // Normalize eye contact percentage if model returned 0–1.
+  if (analysis.bodyLanguageAnalysis?.eyeContact) {
+    const p = analysis.bodyLanguageAnalysis.eyeContact.percentage;
+    if (typeof p === 'number' && Number.isFinite(p)) {
+      const pct = p <= 1.2 ? p * 100 : p;
+      analysis.bodyLanguageAnalysis.eyeContact.percentage = clamp(Math.round(pct), 0, 100);
+    }
+  }
+
+  // Recompute category weighted + overall score (prevents 65.0/10 UI bugs).
+  const cs = analysis.categoryScores;
+  if (cs && typeof cs === 'object') {
+    const normalizeCat = (key: string, weight: number) => {
+      const c = cs[key];
+      if (!c || typeof c !== 'object') return;
+      c.score = norm(c.score);
+      c.weight = typeof c.weight === 'number' && Number.isFinite(c.weight) ? c.weight : weight;
+      c.weighted = round1(c.score * c.weight);
+    };
+    normalizeCat('content', 0.4);
+    normalizeCat('delivery', 0.3);
+    normalizeCat('language', 0.15);
+    normalizeCat('bodyLanguage', 0.15);
+    const sum =
+      (cs.content?.weighted || 0) +
+      (cs.delivery?.weighted || 0) +
+      (cs.language?.weighted || 0) +
+      (cs.bodyLanguage?.weighted || 0);
+    analysis.overallScore = clamp(round1(sum), 0, 10);
+  }
+}
+
 function formatDurationSeconds(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   const mins = Math.floor(s / 60);
@@ -1113,13 +1227,25 @@ Rules:
     // ----------------------------
     // Step 2) Judge using transcript (+ optional video)
     // ----------------------------
-    const includeVideo = process.env.INCLUDE_VIDEO_IN_ANALYSIS !== 'false';
+    // Video payloads can massively increase latency/cost for longer recordings.
+    // Default: include video only up to MAX_VIDEO_SECONDS_FOR_ANALYSIS (180s) unless explicitly disabled.
+    const maxVideoSeconds = Number(process.env.MAX_VIDEO_SECONDS_FOR_ANALYSIS || 180);
+    const includeVideo =
+      process.env.INCLUDE_VIDEO_IN_ANALYSIS !== 'false' &&
+      durationSeconds > 0 &&
+      Number.isFinite(maxVideoSeconds) &&
+      maxVideoSeconds > 0 &&
+      durationSeconds <= maxVideoSeconds;
     const base64Video = includeVideo ? await encodeVideoToBase64(videoPathForAnalysis) : null;
     if (base64Video) {
       console.log(`   📹 Video encoded (Base64 length: ${base64Video.length})`);
     } else {
-      console.log('   📹 Video omitted (INCLUDE_VIDEO_IN_ANALYSIS=false)');
+      console.log(
+        `   📹 Video omitted (${process.env.INCLUDE_VIDEO_IN_ANALYSIS === 'false' ? 'INCLUDE_VIDEO_IN_ANALYSIS=false' : `duration>${Number.isFinite(maxVideoSeconds) ? maxVideoSeconds : 180}s`})`
+      );
     }
+
+    const transcriptTimecoded = buildEstimatedTimecodedTranscript(transcript, durationSeconds, 36);
 
     const judgePrompt = `
 You are a professional NSDA impromptu judge for BALLOT, an elite debate training platform.
@@ -1135,10 +1261,37 @@ TRANSCRIPT (verbatim, do not invent beyond this):
 ${transcript}
 """
 
+TRANSCRIPT WITH ESTIMATED TIME-CODES (USE THESE FOR ALL TIME RANGES):
+${transcriptTimecoded ? `"""` : '""'}
+${transcriptTimecoded}
+${transcriptTimecoded ? `"""` : '""'}
+
 CRITICAL ANTI-HALLUCINATION RULES (MUST FOLLOW):
 - Do NOT invent transcript content, evidence, timestamps, or structure.
 - Use the transcript for all evidence quotes.
+- For time ranges, ONLY use the bracketed time ranges provided in TRANSCRIPT WITH ESTIMATED TIME-CODES.
 - If transcript is too short, say so explicitly and return minimal evaluation.
+
+FEEDBACK FORMAT RULE (MUST FOLLOW FOR EVERY feedback STRING IN THE JSON):
+Each feedback string MUST follow this exact markdown template (always include all sections; do not rename headings):
+**Score Justification:** 2–4 sentences summarizing what the speaker did and their level (novice/developing/varsity/national).
+
+**Evidence from Speech:**
+- "<short quote from transcript>" [m:ss-m:ss]
+- "<short quote from transcript>" [m:ss-m:ss]
+- "<short quote from transcript>" [m:ss-m:ss]
+
+**What This Means:** 1–2 sentences explaining the competitive implication for an NSDA ballot.
+
+**How to Improve:**
+1. One concrete drill or adjustment.
+2. One concrete drill or adjustment.
+3. One concrete drill or adjustment.
+
+SCORING RULES:
+- ALL scores are on a 0.0–10.0 scale (one decimal max). Never use 0–100.
+- categoryScores.*.weighted must equal score * weight.
+- overallScore must equal the sum of the four weighted category scores.
 
 Return ONLY valid JSON matching this structure (NO transcript field; transcript is provided above):
 {
@@ -1206,6 +1359,9 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
         : [{ type: 'text', text: judgePrompt }],
       maxTokens: 7000,
     });
+
+    // Normalize any model-returned scoring scale quirks (0–100 or 0–1) and recompute weighted totals.
+    normalizeAnalysisScoringInPlace(analysis);
 
     // Backend truth: recompute duration + derived stats and guard against hallucinated ballots.
     // Use the same best-available duration for stats, but keep an independent attempt for safety.
