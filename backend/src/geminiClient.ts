@@ -363,14 +363,12 @@ function normalizeAnalysisScoringInPlace(analysis: any): void {
 
 function computePerformanceTier(overallScore10: number): string {
   const s = overallScore10;
-  if (s >= 9.5) return 'Exceptional / Top Speaker';
-  if (s >= 9.0) return 'Finals Level';
-  if (s >= 8.5) return 'Semifinals Level';
-  if (s >= 8.0) return 'Quarterfinals / Breaking';
-  if (s >= 7.5) return 'Varsity Competitive';
-  if (s >= 7.0) return 'Competitive';
-  if (s >= 6.5) return 'Developing';
-  return 'Novice';
+  // Keep tiers simple and aligned to NSDA-calibrated rubric ranges.
+  // 9.0+ Finals caliber, 8.0+ breaking range, 7.7+ early competitive, else developing.
+  if (s >= 9.0) return 'Finals';
+  if (s >= 8.0) return 'Breaking';
+  if (s >= 7.7) return 'Competitive';
+  return 'Developing';
 }
 
 function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): void {
@@ -396,9 +394,12 @@ function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): vo
     note = '⚠️ EXCEEDS LIMIT (>7:00): Time Management penalty applied.';
   }
 
-  if (contentPenalty > 0 && analysis.categoryScores?.content) {
-    analysis.categoryScores.content.score = clamp(round1((analysis.categoryScores.content.score || 0) - contentPenalty), 0, 10);
-  }
+  // Stash the content penalty for later category-score recomputation (so categoryScores.content stays consistent with sub-scores).
+  (analysis as any).__rubric = {
+    ...(analysis as any).__rubric,
+    contentPenalty,
+  };
+
   if (timeMgmtPenalty > 0 && analysis.contentAnalysis?.timeManagement) {
     analysis.contentAnalysis.timeManagement.score = clamp(round1((analysis.contentAnalysis.timeManagement.score || 0) - timeMgmtPenalty), 0, 10);
   }
@@ -410,9 +411,61 @@ function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): vo
       tm.feedback = `${tm.feedback}\n\n${note}`.trim();
     }
   }
+}
 
-  // Recompute weighted totals + overall
-  normalizeAnalysisScoringInPlace(analysis);
+function avg(nums: Array<number | undefined>): number {
+  const values = nums.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+  if (values.length === 0) return 0;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function computeCategoryScoresFromSubscoresInPlace(analysis: any): void {
+  if (!analysis || typeof analysis !== 'object') return;
+  const cs = analysis.categoryScores;
+  if (!cs || typeof cs !== 'object') return;
+
+  const contentAvg = avg([
+    analysis.contentAnalysis?.topicAdherence?.score,
+    analysis.contentAnalysis?.argumentStructure?.score,
+    analysis.contentAnalysis?.depthOfAnalysis?.score,
+    analysis.contentAnalysis?.examplesEvidence?.score,
+    analysis.contentAnalysis?.timeManagement?.score,
+  ]);
+  const deliveryAvg = avg([
+    analysis.deliveryAnalysis?.vocalVariety?.score,
+    analysis.deliveryAnalysis?.pacing?.score,
+    analysis.deliveryAnalysis?.articulation?.score,
+    analysis.deliveryAnalysis?.fillerWords?.score,
+  ]);
+  const languageAvg = avg([
+    analysis.languageAnalysis?.vocabulary?.score,
+    analysis.languageAnalysis?.rhetoricalDevices?.score,
+    analysis.languageAnalysis?.emotionalAppeal?.score,
+    analysis.languageAnalysis?.logicalAppeal?.score,
+  ]);
+  const bodyAvg = avg([
+    analysis.bodyLanguageAnalysis?.eyeContact?.score,
+    analysis.bodyLanguageAnalysis?.gestures?.score,
+    analysis.bodyLanguageAnalysis?.posture?.score,
+    analysis.bodyLanguageAnalysis?.stagePresence?.score,
+  ]);
+
+  const penalty = Number((analysis as any).__rubric?.contentPenalty || 0);
+  cs.content.score = clamp(round1(contentAvg - penalty), 0, 10);
+  cs.delivery.score = clamp(round1(deliveryAvg), 0, 10);
+  cs.language.score = clamp(round1(languageAvg), 0, 10);
+  cs.bodyLanguage.score = clamp(round1(bodyAvg), 0, 10);
+
+  // Ensure weights and weighted totals are consistent.
+  cs.content.weight = 0.4;
+  cs.delivery.weight = 0.3;
+  cs.language.weight = 0.15;
+  cs.bodyLanguage.weight = 0.15;
+  cs.content.weighted = round1(cs.content.score * cs.content.weight);
+  cs.delivery.weighted = round1(cs.delivery.score * cs.delivery.weight);
+  cs.language.weighted = round1(cs.language.score * cs.language.weight);
+  cs.bodyLanguage.weighted = round1(cs.bodyLanguage.score * cs.bodyLanguage.weight);
+  analysis.overallScore = clamp(round1(cs.content.weighted + cs.delivery.weighted + cs.language.weighted + cs.bodyLanguage.weighted), 0, 10);
 }
 
 function enforceTournamentReadinessInPlace(analysis: any, durationSeconds: number, fillerPerMinute: number, eyeContactPct?: number): void {
@@ -1622,6 +1675,8 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
 
     // Apply rubric length penalties and enforce rubric-derived tournament readiness + tier.
     applyLengthPenaltiesInPlace(analysis, durationSecondsActual);
+    // Ensure category scores are consistent with the detailed sub-scores (prevents “subscores high but category low” mismatches).
+    computeCategoryScoresFromSubscoresInPlace(analysis);
     enforceTournamentReadinessInPlace(
       analysis,
       durationSecondsActual,

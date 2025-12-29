@@ -34,10 +34,11 @@ function getTier(sessions: any[]) {
   const recent = sessions.slice(0, 5);
   const avg = recent.reduce((sum, s) => sum + (s.overall_score || 0), 0) / recent.length;
 
-  if (avg >= 8) return { name: 'National Level', color: '#7c3aed' }; // Purple
-  if (avg >= 6) return { name: 'Varsity', color: '#059669' }; // Green
-  if (avg >= 4) return { name: 'Developing', color: '#d97706' }; // Amber
-  return { name: 'Novice', color: '#dc2626' }; // Red
+  // Simple NSDA-aligned tiers (match backend): Developing / Competitive / Breaking / Finals
+  if (avg >= 9.0) return { name: 'Finals', color: '#059669' }; // Green
+  if (avg >= 8.0) return { name: 'Breaking', color: '#2563eb' }; // Blue
+  if (avg >= 7.7) return { name: 'Competitive', color: '#ca8a04' }; // Gold
+  return { name: 'Developing', color: '#9ca3af' }; // Gray
 }
 
 // Helper to determine trend based on last 3 sessions

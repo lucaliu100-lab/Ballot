@@ -262,17 +262,17 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     : 0;
   const isStructureWeak = avgContentScore < 6.0;
 
-  // Tournament Readiness Logic
+  // Tier logic (simple + NSDA-aligned): Developing / Competitive / Breaking / Finals
   let tierName = "DEVELOPING";
   let tierColor = "#9ca3af"; // Gray
   let tierGradient = "linear-gradient(135deg, #f3f4f6 0%, #ffffff 100%)";
   let tierTextColor = "#374151";
 
-  let nextTier = "Local";
-  let nextThreshold = "5.0";
+  let nextTier = "Competitive";
+  let nextThreshold = "7.7";
   let recommendations = [
-    "Focus on basic structure",
-    "Speak for at least 3 minutes",
+    "Build clearer structure (thesis + 2–3 labeled points)",
+    "Hit 4:00–6:00 consistently",
     "Practice weekly"
   ];
 
@@ -281,44 +281,36 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     tierColor = "#059669"; // Green
     tierGradient = "linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%)";
     tierTextColor = "#065f46";
-    nextTier = ""; // Reached top
+    nextTier = ""; // Top tier
     recommendations = [
-      "Maintain excellence",
-      "Maintain consistency",
-      "Continue weekly practice",
-      "Focus on advanced techniques"
+      "Maintain execution consistency",
+      "Keep evidence highly specific",
+      "Refine openings/closers for judge impact"
     ];
   } else if (averageScore >= 8.0) {
-    tierName = "SEMIFINALS";
+    tierName = "BREAKING";
     tierColor = "#2563eb"; // Blue
     tierGradient = "linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)";
     tierTextColor = "#1e40af";
     nextTier = "Finals";
     nextThreshold = "9.0";
     recommendations = [
-      "Refine vocal delivery and pacing",
-      "Strengthen evidence and examples",
-      "Practice 2-3 per week"
+      "Add deeper warrants (2 'because' per claim)",
+      "Increase variety of examples",
+      "Practice 2–3x per week"
     ];
-  } else if (averageScore >= 6.5) {
-    tierName = "QUARTERFINALS";
-    tierColor = "#ca8a04"; // Yellow/Dark Gold
+  } else if (averageScore >= 7.7) {
+    tierName = "COMPETITIVE";
+    tierColor = "#ca8a04"; // Gold
     tierGradient = "linear-gradient(135deg, #fefce8 0%, #ffffff 100%)";
     tierTextColor = "#854d0e";
-    nextTier = "Semifinals";
+    nextTier = "Breaking";
     nextThreshold = "8.0";
     recommendations = [
-      "Improve argument structure",
-      "Increase speech length to 5+ minutes",
-      "Practice 3-4 per week"
+      "Tighten signposting + transitions",
+      "Add one concrete example per point",
+      "Practice 2x per week"
     ];
-  } else if (averageScore >= 5.0) {
-    tierName = "LOCAL ROUND";
-    tierColor = "#7c3aed"; // Purple
-    tierGradient = "linear-gradient(135deg, #f5f3ff 0%, #ffffff 100%)";
-    tierTextColor = "#5b21b6";
-    nextTier = "Quarterfinals";
-    nextThreshold = "6.5";
   }
 
   // Priority Improvements Logic (Detailed Aggregation)
