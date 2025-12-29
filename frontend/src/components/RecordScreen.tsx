@@ -426,6 +426,7 @@ function RecordScreen({
               src={previewUrl}
               controls
               playsInline
+              preload="metadata"
               style={styles.video}
             />
           )}
