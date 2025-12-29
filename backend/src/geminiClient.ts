@@ -1051,13 +1051,16 @@ Rules:
     let transcriptWordCount = countWords(transcript);
     console.log(`   📝 Transcript words (single-pass): ${transcriptWordCount} [model=${transcribeModelUsed}]`);
     console.log(`   📝 Transcript preview (first 100 chars): "${transcript.substring(0, 100)}..."`);
-    console.log(`   📝 Audio base64 size: ${(audioBase64.length / 1024).toFixed(1)} KB, duration: ${formatDurationSeconds(audioDurationBest || 0)}`);
 
     // Some providers/models only transcribe the first N seconds of audio.
     // If we have a long recording but got a tiny transcript, retry by chunking.
     const audioBytes = await fs.promises.stat(audioPath).then((s) => s.size).catch(() => 0);
     const audioDurationEstimated = audioBytes > 0 ? estimateWavDurationSecondsFromBytes(audioBytes) : 0;
     const audioDurationBest = audioDurationSeconds > 0 ? audioDurationSeconds : audioDurationEstimated;
+    console.log(
+      `   📝 Audio base64 size: ${(audioBase64.length / 1024).toFixed(1)} KB` +
+        (audioDurationBest > 0 ? `, duration: ${formatDurationSeconds(audioDurationBest)}` : '')
+    );
     const shouldTryChunking =
       transcriptWordCount < 25 &&
       audioDurationBest >= 20;
