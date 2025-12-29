@@ -68,6 +68,7 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCtaHover, setIsCtaHover] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   
   // Dashboard Data State
   const [lastSession, setLastSession] = useState<any | null>(null);
@@ -115,12 +116,15 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
   const handleStartRound = async () => {
     setLoading(true);
     setError(null);
+    const currentRetry = retryCount;
+    setRetryCount(currentRetry + 1);
 
     try {
       console.log('🎬 Start Round: requesting /api/start-round...');
 
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 30_000); // 30s for Render free tier cold starts
+      // Generous timeout for cold starts: 45 seconds
+      const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
 
       const response = await fetch(API_ENDPOINTS.startRound, {
         method: 'POST',
@@ -146,10 +150,15 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
       }
 
       const data: RoundData = await response.json();
+      setRetryCount(0); // Reset on success
       onRoundStart(data);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        setError('Start round timed out. Please try again.');
+        setError(
+          currentRetry === 0
+            ? '⏰ Server is waking up (free hosting cold start). This can take 30-40 seconds. Please click "Start Round" again and wait.'
+            : `⏰ Still waking up... (Attempt ${currentRetry + 1}). Click "Start Round" again and wait 30-40 seconds.`
+        );
       } else {
         setError(err instanceof Error ? err.message : 'Unknown error');
       }
