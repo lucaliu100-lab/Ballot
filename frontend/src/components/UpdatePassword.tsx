@@ -20,6 +20,7 @@ function UpdatePassword({ onSuccess }: UpdatePasswordProps) {
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!supabase) return setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
     if (!password) return setError('Please enter a new password');
     if (password.length < 6) return setError('Password must be at least 6 characters');
     if (password !== confirmPassword) return setError('Passwords do not match');

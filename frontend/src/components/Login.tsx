@@ -34,6 +34,10 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   // ===========================================
 
   const handleGoogleLogin = async () => {
+    if (!supabase) {
+      setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
+      return;
+    }
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -64,6 +68,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
 
   const handleEmailPasswordLogin = async (e: FormEvent) => {
     e.preventDefault();
+    if (!supabase) return setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
     if (!email || !password) return setError('Please fill in all fields');
 
     setIsLoading(true);
@@ -83,6 +88,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
 
   const handleSignUp = async (e: FormEvent) => {
     e.preventDefault();
+    if (!supabase) return setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
     if (!email || !password) return setError('Please fill in all fields');
 
     setIsLoading(true);
@@ -112,6 +118,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
 
   const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
+    if (!supabase) return setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
     if (!email) return setError('Please enter your email address');
 
     setIsLoading(true);

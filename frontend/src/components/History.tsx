@@ -125,6 +125,10 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     const fetchData = async () => {
       setIsLoading(true);
       try {
+        if (!supabase) {
+          setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+          return;
+        }
         const { data, error } = await supabase
           .from('sessions')
           .select('*')

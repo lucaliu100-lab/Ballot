@@ -17,7 +17,7 @@
 import { useEffect, useState } from 'react';
 
 // Import Supabase
-import { supabase } from './lib/supabase';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
 
 // Import shared utilities and constants
 import { PREP_TIMER_DURATION, API_ENDPOINTS } from './lib/constants';
@@ -54,6 +54,14 @@ function App() {
   const [initialAuthView, setInitialAuthView] = useState<'sign_in' | 'sign_up'>('sign_in');
 
   useEffect(() => {
+    if (!supabase) {
+      // Allow the app to render in "guest mode" even if Supabase isn't configured
+      // (common in preview deployments or first-time Cloudflare Pages setup).
+      setUser(null);
+      setAuthLoading(false);
+      return;
+    }
+
     // Check active sessions and sets the user
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -501,6 +509,11 @@ function App() {
             setShowLogin(true);
           }}
         />
+        {!isSupabaseConfigured && (
+          <div style={styles.envBanner}>
+            <strong>Setup required:</strong> Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to your Cloudflare Pages environment variables.
+          </div>
+        )}
         <LandingPage
           onStart={() => {
             setInitialAuthView('sign_in');
@@ -529,7 +542,7 @@ function App() {
           onNavigateToLanding={() => {}} // Stay on landing
           onNavigateToDashboard={handleGoHome}
           onNavigateToHistory={() => { setShowLanding(false); setShowHistory(true); }}
-          onSignOut={() => supabase.auth.signOut()}
+          onSignOut={() => supabase?.auth.signOut()}
         />
         
         {/* Render Landing Page Content */}
@@ -538,7 +551,7 @@ function App() {
           onSignIn={() => {}} // Should not happen
           isAuthenticated={true}
           userEmail={user.email}
-          onSignOut={() => supabase.auth.signOut()}
+          onSignOut={() => supabase?.auth.signOut()}
           onDashboardClick={handleGoHome}
           onHistoryClick={() => { setShowLanding(false); setShowHistory(true); }}
         />
@@ -562,7 +575,7 @@ function App() {
           onNavigateToLanding={() => setShowLanding(true)}
           onNavigateToDashboard={handleGoHome}
           onNavigateToHistory={() => setShowHistory(true)}
-          onSignOut={() => supabase.auth.signOut()}
+          onSignOut={() => supabase?.auth.signOut()}
           disabled={isNavDisabled}
         />
       )}
@@ -607,6 +620,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#666666',
     marginTop: '16px',
     fontSize: '1rem',
+  },
+  envBanner: {
+    maxWidth: '1280px',
+    margin: '16px auto 0',
+    padding: '12px 16px',
+    borderRadius: '10px',
+    border: '1px solid #fbbf24',
+    background: '#fffbeb',
+    color: '#92400e',
+    fontFamily: "'Segoe UI', system-ui, sans-serif",
+    lineHeight: 1.4,
   },
 };
 

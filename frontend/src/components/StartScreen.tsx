@@ -77,6 +77,7 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
   // Fetch dashboard data
   useEffect(() => {
     const fetchDashboardData = async () => {
+      if (!supabase) return;
       // Fetch sessions
       // We filter by word_count > 10 to get a more accurate count of "completed" attempts
       const { data: sessions, count } = await supabase

@@ -225,12 +225,19 @@ function FeedbackReport({
       return;
     }
 
+    // Supabase not configured (common in first-time deployments / previews)
+    const client = supabase;
+    if (!client) {
+      console.warn('📝 Skipping save - Supabase is not configured');
+      return;
+    }
+
     // Save the session to Supabase
     const saveSession = async () => {
       try {
         console.log('💾 Saving session to Supabase...');
         
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user } } = await client.auth.getUser();
         
         if (!user) {
            console.error('No user found, cannot save session');
@@ -240,7 +247,7 @@ function FeedbackReport({
         // Check if already saved in Supabase to prevent duplicates.
         // Use a stable identifier: the uploaded video filename is unique per recording.
         if (videoFilename) {
-          const { data: existing, error: existingError } = await supabase
+          const { data: existing, error: existingError } = await client
             .from('sessions')
             .select('id')
             .eq('user_id', user.id)
@@ -258,7 +265,7 @@ function FeedbackReport({
           }
         }
 
-        const { error } = await supabase.from('sessions').insert({
+        const { error } = await client.from('sessions').insert({
             user_id: user.id,
             theme,
             quote,
