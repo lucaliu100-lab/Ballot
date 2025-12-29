@@ -76,6 +76,7 @@ export const STEP_LABELS: Record<FlowStep, string> = {
   'prep': 'Prepare',
   'record': 'Record',
   'processing': 'Analyzing',
+  'insufficient': 'Insufficient Speech',
   'report': 'Feedback',
   'ballot': 'Ballot',
 };

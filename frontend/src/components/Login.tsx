@@ -7,8 +7,10 @@
  * 3. Password Reset (Forgot Password)
  */
 
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
+
+type AuthView = 'sign_in' | 'sign_up' | 'forgot_password';
 
 interface LoginProps {
   initialView?: AuthView;
@@ -60,7 +62,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   };
   */
 
-  const handleEmailPasswordLogin = async (e: React.FormEvent) => {
+  const handleEmailPasswordLogin = async (e: FormEvent) => {
     e.preventDefault();
     if (!email || !password) return setError('Please fill in all fields');
 
@@ -79,7 +81,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
     }
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
+  const handleSignUp = async (e: FormEvent) => {
     e.preventDefault();
     if (!email || !password) return setError('Please fill in all fields');
 
@@ -108,7 +110,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
     }
   };
 
-  const handleResetPassword = async (e: React.FormEvent) => {
+  const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
     if (!email) return setError('Please enter your email address');
 

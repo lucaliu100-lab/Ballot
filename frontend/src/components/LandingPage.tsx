@@ -12,7 +12,6 @@ interface LandingPageProps {
 
 function LandingPage({ 
   onStart, 
-  onSignIn, 
 }: LandingPageProps) {
   const [hoverPrimary, setHoverPrimary] = useState(false);
   const [hoverFooter, setHoverFooter] = useState(false);

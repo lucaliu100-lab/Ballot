@@ -6,7 +6,7 @@
  * Acts as a page wrapper around FeedbackReport with added navigation.
  */
 
-import { useMemo, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import FeedbackReport from './FeedbackReport';
 import { DebateAnalysis } from '../types';
