@@ -32,9 +32,9 @@ function LandingPage({
 
       {/* Hero Section */}
       <div style={styles.heroSection}>
-        <h1 style={styles.headline}>Elevate Your Competitive Debating</h1>
+        <h1 style={styles.headline}>Master Impromptu Speaking</h1>
         <p style={styles.subtitle}>
-          A professional training platform for competitive debaters with AI-powered performance analysis for tournament preparation.
+          A professional training platform for impromptu speakers with AI-powered performance analysis for tournament preparation.
         </p>
 
         <div style={styles.buttonGroup}>
@@ -47,7 +47,7 @@ function LandingPage({
               ...(hoverPrimary ? styles.primaryButtonHover : {}),
             }}
           >
-            Start Training Session
+            Start Impromptu Session
           </button>
         </div>
       </div>
@@ -56,6 +56,9 @@ function LandingPage({
 
       {/* Judging System Section */}
       <div style={styles.contentSection}>
+        <div style={styles.badgeContainer}>
+          <span style={styles.badge}>Currently Available: Impromptu Speaking</span>
+        </div>
         <h2 style={styles.sectionTitle}>Judging System</h2>
         <p style={styles.sectionDesc}>
           The platform uses NSDA standard impromptu evaluation criteria with multimodal AI analysis of video, audio, transcript, and body language to provide tournament-grade feedback.
@@ -269,6 +272,17 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     textAlign: 'center',
+  },
+  badgeContainer: {
+    marginBottom: '16px',
+  },
+  badge: {
+    fontSize: '14px',
+    color: '#6b7280',
+    background: '#f3f4f6',
+    padding: '6px 12px',
+    borderRadius: '16px',
+    fontWeight: 500,
   },
   sectionTitle: {
     fontSize: '28px',
