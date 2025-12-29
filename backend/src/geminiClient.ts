@@ -357,6 +357,82 @@ function normalizeAnalysisScoringInPlace(analysis: any): void {
   }
 }
 
+// ==============================
+// NSDA-calibrated rubric enforcement (server-side truth)
+// ==============================
+
+function computePerformanceTier(overallScore10: number): string {
+  const s = overallScore10;
+  if (s >= 9.5) return 'Exceptional / Top Speaker';
+  if (s >= 9.0) return 'Finals Level';
+  if (s >= 8.5) return 'Semifinals Level';
+  if (s >= 8.0) return 'Quarterfinals / Breaking';
+  if (s >= 7.5) return 'Varsity Competitive';
+  if (s >= 7.0) return 'Competitive';
+  if (s >= 6.5) return 'Developing';
+  return 'Novice';
+}
+
+function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): void {
+  if (!analysis || typeof analysis !== 'object') return;
+  const dur = Number.isFinite(durationSeconds) ? durationSeconds : 0;
+  if (dur <= 0) return;
+
+  // Penalties from nsda-calibrated-rubric.md:
+  // <3:00 → -2.0 to Content + flag
+  // 3:00-3:59 → -1.0 to Content + note
+  // >7:00 → -0.5 to Time Management + flag
+  let contentPenalty = 0;
+  let timeMgmtPenalty = 0;
+  let note = '';
+  if (dur < 180) {
+    contentPenalty = 2.0;
+    note = '⚠️ INSUFFICIENT LENGTH (<3:00): Content score penalty applied.';
+  } else if (dur < 240) {
+    contentPenalty = 1.0;
+    note = 'Below optimal range (3:00–3:59): Content score penalty applied.';
+  } else if (dur > 420) {
+    timeMgmtPenalty = 0.5;
+    note = '⚠️ EXCEEDS LIMIT (>7:00): Time Management penalty applied.';
+  }
+
+  if (contentPenalty > 0 && analysis.categoryScores?.content) {
+    analysis.categoryScores.content.score = clamp(round1((analysis.categoryScores.content.score || 0) - contentPenalty), 0, 10);
+  }
+  if (timeMgmtPenalty > 0 && analysis.contentAnalysis?.timeManagement) {
+    analysis.contentAnalysis.timeManagement.score = clamp(round1((analysis.contentAnalysis.timeManagement.score || 0) - timeMgmtPenalty), 0, 10);
+  }
+
+  if (note) {
+    // Append note to time management feedback so users see why a score moved.
+    const tm = analysis.contentAnalysis?.timeManagement;
+    if (tm && typeof tm.feedback === 'string' && !tm.feedback.includes(note)) {
+      tm.feedback = `${tm.feedback}\n\n${note}`.trim();
+    }
+  }
+
+  // Recompute weighted totals + overall
+  normalizeAnalysisScoringInPlace(analysis);
+}
+
+function enforceTournamentReadinessInPlace(analysis: any, durationSeconds: number, fillerPerMinute: number, eyeContactPct?: number): void {
+  if (!analysis || typeof analysis !== 'object') return;
+  const overall = typeof analysis.overallScore === 'number' ? analysis.overallScore : 0;
+  const cs = analysis.categoryScores || {};
+  const minCat = Math.min(
+    cs.content?.score ?? 0,
+    cs.delivery?.score ?? 0,
+    cs.language?.score ?? 0,
+    cs.bodyLanguage?.score ?? 0
+  );
+  const durOk = durationSeconds >= 240 && durationSeconds <= 420; // 4:00-7:00
+  const fillersOk = Number.isFinite(fillerPerMinute) ? fillerPerMinute < 8 : true;
+  const eyeOk = typeof eyeContactPct === 'number' ? eyeContactPct > 50 : true;
+
+  analysis.tournamentReady = Boolean(overall >= 7.5 && minCat >= 7.0 && durOk && fillersOk && eyeOk);
+  analysis.performanceTier = computePerformanceTier(overall);
+}
+
 function formatDurationSeconds(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   const mins = Math.floor(s / 60);
@@ -563,12 +639,123 @@ async function callOpenRouterJson(params: {
   const resultText = data.choices?.[0]?.message?.content;
   if (typeof resultText !== 'string' || !resultText.trim()) throw new Error('Empty response from model.');
 
-  try {
-    return JSON.parse(resultText);
-  } catch (e) {
-    const snippet = resultText.slice(0, 500);
-    throw new Error(`Model returned non-JSON content. First 500 chars: ${snippet}`);
+  const raw = String(resultText).trim();
+
+  const extractJsonObject = (text: string): string => {
+    const t = text
+      .replace(/^```(?:json)?/i, '')
+      .replace(/```$/i, '')
+      .trim();
+    const first = t.indexOf('{');
+    const last = t.lastIndexOf('}');
+    if (first >= 0 && last > first) return t.slice(first, last + 1);
+    return t;
+  };
+
+  // Repair common model mistakes: raw newlines/tabs inside JSON strings (must be escaped).
+  const escapeControlCharsInStrings = (text: string): string => {
+    let out = '';
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (!inString) {
+        if (ch === '"') inString = true;
+        out += ch;
+        continue;
+      }
+      // inString
+      if (escaped) {
+        out += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        out += ch;
+        inString = false;
+        continue;
+      }
+      if (ch === '\n') {
+        out += '\\n';
+        continue;
+      }
+      if (ch === '\r') {
+        // drop; CRLF handled by \n
+        continue;
+      }
+      if (ch === '\t') {
+        out += '\\t';
+        continue;
+      }
+      out += ch;
+    }
+    return out;
+  };
+
+  const tryParse = (text: string): any | null => {
+    const candidate = extractJsonObject(text);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try repair
+      try {
+        return JSON.parse(escapeControlCharsInStrings(candidate));
+      } catch {
+        return null;
+      }
+    }
+  };
+
+  const parsed = tryParse(raw);
+  if (parsed) return parsed;
+
+  // One retry: ask the model to resend valid JSON only (escape newlines as \\n).
+  const retryController = new AbortController();
+  const retryTimeout = setTimeout(() => retryController.abort(), 300000);
+  const retryResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': process.env.PUBLIC_APP_URL || 'https://ballotv1.pages.dev',
+      'X-Title': 'Ballot Championship Coach',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'user', content },
+        {
+          role: 'user',
+          content:
+            'Your previous response was invalid JSON (likely raw newlines inside strings). ' +
+            'Return ONLY valid JSON. Escape all newlines inside strings as \\\\n.',
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      max_tokens: maxTokens,
+    }),
+    signal: retryController.signal,
+  });
+  clearTimeout(retryTimeout);
+  if (!retryResp.ok) {
+    const errorText = await retryResp.text().catch(() => 'No error body');
+    throw new Error(`OpenRouter ${retryResp.status}: retry parse failed`);
   }
+  const retryData = await retryResp.json();
+  const retryText = retryData.choices?.[0]?.message?.content;
+  if (typeof retryText === 'string' && retryText.trim()) {
+    const parsedRetry = tryParse(retryText);
+    if (parsedRetry) return parsedRetry;
+  }
+
+  const snippet = raw.slice(0, 500);
+  throw new Error(`Model returned non-JSON content. First 500 chars: ${snippet}`);
 }
 
 function buildInsufficientSpeechAnalysis(durationSeconds: number, reason: string): NonNullable<GeminiAnalysisResult['analysis']> {
@@ -1251,6 +1438,24 @@ Rules:
 You are a professional NSDA impromptu judge for BALLOT, an elite debate training platform.
 Analyze this competitive impromptu speech with surgical precision.
 
+NSDA-CALIBRATED RUBRIC (MUST FOLLOW):
+- Scoring is 0.0–10.0 (one decimal). This corresponds to NSDA 30-point speaker points mapping:
+  - 8.0–8.5 is an average competitive high school debater (roughly 24–25.5 NSDA).
+  - 9.0+ is rare and indicates finals-caliber execution.
+- LENGTH PENALTIES (applied to Content score):
+  - <3:00 → -2.0 + flag "⚠️ INSUFFICIENT LENGTH"
+  - 3:00–3:59 → -1.0 + note "Below optimal range"
+  - 4:00–6:00 → no penalty (optimal)
+  - >7:00 → -0.5 to Time Management + flag "⚠️ EXCEEDS LIMIT"
+- WEIGHTED FORMULA:
+  Overall = (Content × 0.40) + (Delivery × 0.30) + (Language × 0.15) + (Body Language × 0.15)
+- Tournament readiness criteria (set tournamentReady=true ONLY if all hold):
+  - overallScore ≥ 7.5
+  - no category score < 7.0
+  - speech length 4:00–7:00
+  - filler rate < 8/min
+  - eye contact > 50%
+
 THEME: ${input.theme}
 QUOTE: ${input.quote}
 VIDEO_DURATION_SECONDS (best available): ${Math.round(durationSeconds)}
@@ -1406,6 +1611,15 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
       analysis.deliveryAnalysis.fillerWords.breakdown = fillerBreakdown;
     }
 
+    // Apply rubric length penalties and enforce rubric-derived tournament readiness + tier.
+    applyLengthPenaltiesInPlace(analysis, durationSecondsActual);
+    enforceTournamentReadinessInPlace(
+      analysis,
+      durationSecondsActual,
+      fillerPerMinute,
+      analysis.bodyLanguageAnalysis?.eyeContact?.percentage
+    );
+
     // Priority Improvements should represent the biggest real gaps.
     // Important: do not recommend filler/eye contact/pacing fixes when metrics show they are already fine.
     normalizePriorityImprovements(analysis, {
@@ -1416,9 +1630,9 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
       eyeContactPercentage: analysis.bodyLanguageAnalysis?.eyeContact?.percentage,
     });
 
-    // Ensure we always provide at least 2 improvements (high-ROI refinements),
+    // Ensure we always provide at least 3 improvements (rubric requirement),
     // even if the model returns too few or filtering removes some.
-    ensureMinPriorityImprovements(analysis, 2);
+    ensureMinPriorityImprovements(analysis, 3);
     
     console.log('✅ Analysis successful!');
     return {
