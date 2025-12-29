@@ -397,7 +397,11 @@ function applyLengthPenaltiesInPlace(analysis: any, durationSeconds: number): vo
   // Stash the content penalty for later category-score recomputation (so categoryScores.content stays consistent with sub-scores).
   (analysis as any).__rubric = {
     ...(analysis as any).__rubric,
-    contentPenalty,
+    // For sub-optimal short speeches, apply the same penalty across all category averages
+    // to keep category scores consistent and avoid “only Content dropped” confusion.
+    lengthPenalty: contentPenalty,
+    lengthPenaltyAppliedTo: contentPenalty > 0 ? 'all' : 'none',
+    lengthPenaltyNote: note,
   };
 
   if (timeMgmtPenalty > 0 && analysis.contentAnalysis?.timeManagement) {
@@ -450,11 +454,13 @@ function computeCategoryScoresFromSubscoresInPlace(analysis: any): void {
     analysis.bodyLanguageAnalysis?.stagePresence?.score,
   ]);
 
-  const penalty = Number((analysis as any).__rubric?.contentPenalty || 0);
-  cs.content.score = clamp(round1(contentAvg - penalty), 0, 10);
-  cs.delivery.score = clamp(round1(deliveryAvg), 0, 10);
-  cs.language.score = clamp(round1(languageAvg), 0, 10);
-  cs.bodyLanguage.score = clamp(round1(bodyAvg), 0, 10);
+  const lengthPenalty = Number((analysis as any).__rubric?.lengthPenalty || 0);
+  const applyTo = String((analysis as any).__rubric?.lengthPenaltyAppliedTo || 'none');
+  const p = applyTo === 'all' ? lengthPenalty : 0;
+  cs.content.score = clamp(round1(contentAvg - p), 0, 10);
+  cs.delivery.score = clamp(round1(deliveryAvg - p), 0, 10);
+  cs.language.score = clamp(round1(languageAvg - p), 0, 10);
+  cs.bodyLanguage.score = clamp(round1(bodyAvg - p), 0, 10);
 
   // Ensure weights and weighted totals are consistent.
   cs.content.weight = 0.4;

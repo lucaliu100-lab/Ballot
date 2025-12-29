@@ -206,6 +206,9 @@ function FeedbackReport({
   backLabel = "← Back to Dashboard",
   readOnly = false,
 }: FeedbackReportProps) {
+  const rubricLengthPenalty = Number((analysis as any)?.__rubric?.lengthPenalty || 0);
+  const rubricLengthPenaltyAppliedTo = String((analysis as any)?.__rubric?.lengthPenaltyAppliedTo || 'none');
+  const rubricLengthPenaltyNote = String((analysis as any)?.__rubric?.lengthPenaltyNote || '').trim();
   // Track if we've already saved this session
   const savedRef = useRef(false);
   
@@ -449,6 +452,11 @@ function FeedbackReport({
           {/* CONTENT ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
+            {rubricLengthPenalty > 0 && rubricLengthPenaltyAppliedTo === 'all' && (
+              <div style={styles.rubricNote}>
+                Length adjustment: -{rubricLengthPenalty.toFixed(1)} applied to all category averages due to sub-optimal length. {rubricLengthPenaltyNote}
+              </div>
+            )}
             <AnalysisItem 
               title="Topic Adherence" 
               score={analysis.contentAnalysis.topicAdherence.score} 
@@ -805,6 +813,13 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '16px',
     display: 'flex',
     alignItems: 'center',
+  },
+  rubricNote: {
+    fontSize: '0.9rem',
+    color: '#6b7280',
+    marginTop: '-8px',
+    marginBottom: '16px',
+    lineHeight: 1.4,
   },
   analysisItem: {
     marginBottom: '16px',

@@ -32,7 +32,7 @@ function LandingPage({
 
       {/* Hero Section */}
       <div style={styles.heroSection}>
-        <h1 style={styles.headline}>Master Impromptu Speaking</h1>
+        <h1 style={styles.headline}>Elevate Impromptu Speaking</h1>
         <p style={styles.subtitle}>
           A professional training platform for impromptu speakers with AI-powered performance analysis for tournament preparation.
         </p>
@@ -96,31 +96,31 @@ function LandingPage({
         
         <div style={styles.tiersList}>
           <div style={styles.tierItem}>
-             <div style={{...styles.tierSquare, background: '#22c55e'}}></div>
+             <div style={{...styles.tierSquare, background: '#059669'}}></div>
              <div style={styles.tierInfo}>
-               <span style={styles.tierName}>Finals Ready</span>
+               <span style={styles.tierName}>Finals</span>
                <span style={styles.tierRange}>9.0 - 10.0</span>
              </div>
           </div>
           <div style={styles.tierItem}>
-             <div style={{...styles.tierSquare, background: '#3b82f6'}}></div>
+             <div style={{...styles.tierSquare, background: '#2563eb'}}></div>
              <div style={styles.tierInfo}>
-               <span style={styles.tierName}>Semifinals Ready</span>
+               <span style={styles.tierName}>Breaking</span>
                <span style={styles.tierRange}>8.0 - 8.9</span>
              </div>
           </div>
           <div style={styles.tierItem}>
-             <div style={{...styles.tierSquare, background: '#eab308'}}></div>
+             <div style={{...styles.tierSquare, background: '#ca8a04'}}></div>
              <div style={styles.tierInfo}>
-               <span style={styles.tierName}>Quarterfinals Ready</span>
-               <span style={styles.tierRange}>6.5 - 7.9</span>
+               <span style={styles.tierName}>Competitive</span>
+               <span style={styles.tierRange}>7.7 - 7.9</span>
              </div>
           </div>
           <div style={styles.tierItem}>
              <div style={{...styles.tierSquare, background: '#9ca3af'}}></div>
              <div style={styles.tierInfo}>
-               <span style={styles.tierName}>Local Round Ready</span>
-               <span style={styles.tierRange}>Below 6.5</span>
+               <span style={styles.tierName}>Developing</span>
+               <span style={styles.tierRange}>Below 7.7</span>
              </div>
           </div>
         </div>
