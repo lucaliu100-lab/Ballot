@@ -243,6 +243,20 @@ function App() {
     isMock: boolean,
     transcriptData: string
   ) => {
+    // If backend isn't configured (e.g., Render missing OPENROUTER_API_KEY), it returns mock data.
+    // Don't mislead users with "insufficient length" in that case.
+    if (isMock) {
+      setInsufficientWordCount(0);
+      setInsufficientReason(
+        'AI analysis is not configured on the server. Set OPENROUTER_API_KEY in your Render service environment variables, redeploy, then try again.'
+      );
+      setAnalysis(null);
+      setIsFeedbackMock(false);
+      setTranscript(transcriptData);
+      setCurrentStep('insufficient');
+      return;
+    }
+
     const t = (transcriptData || '').trim();
     const wc = t ? t.split(/\s+/).filter(Boolean).length : 0;
 

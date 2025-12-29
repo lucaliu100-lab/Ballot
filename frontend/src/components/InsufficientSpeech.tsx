@@ -16,21 +16,29 @@ interface InsufficientSpeechProps {
 }
 
 function InsufficientSpeech({ wordCount, reason, onRedoRound, onNewRound, onGoHome }: InsufficientSpeechProps) {
+  const isConfigIssue =
+    typeof reason === 'string' &&
+    (reason.includes('OPENROUTER_API_KEY') || reason.toLowerCase().includes('not configured'));
+
   return (
     <div style={styles.container}>
       <div style={styles.inner}>
         <div style={styles.header}>
-          <div style={styles.kicker}>INSUFFICIENT LENGTH</div>
-          <h2 style={styles.title}>Too Short to Score Competitively</h2>
+          <div style={styles.kicker}>{isConfigIssue ? 'SETUP REQUIRED' : 'INSUFFICIENT LENGTH'}</div>
+          <h2 style={styles.title}>{isConfigIssue ? 'AI Analysis Not Configured' : 'Too Short to Score Competitively'}</h2>
           <p style={styles.subtitle}>
-            We couldn’t generate a fair, tournament-grade ballot from this recording.
+            {isConfigIssue
+              ? 'The server is running, but the AI analysis service is not configured yet.'
+              : 'We couldn’t generate a fair, tournament-grade ballot from this recording.'}
           </p>
         </div>
 
         <div style={styles.card}>
           <div style={styles.cardTitle}>What happened</div>
           <p style={styles.cardText}>
-            Your transcript was <strong>{wordCount}</strong> words. Competitive scoring requires a longer, continuous speech.
+            {isConfigIssue
+              ? 'Your recording uploaded successfully, but the server returned mock data because the AI key is missing.'
+              : <>Your transcript was <strong>{wordCount}</strong> words. Competitive scoring requires a longer, continuous speech.</>}
           </p>
           <div style={styles.divider} />
           <div style={styles.reasonRow}>

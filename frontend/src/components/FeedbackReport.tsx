@@ -111,6 +111,8 @@ interface AnalysisItemProps {
 const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetric }: AnalysisItemProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const parsed = parseFeedback(feedback);
+  const hasStructuredDetails =
+    parsed.evidence.length > 0 || Boolean(parsed.meaning) || parsed.improvement.length > 0;
   
   return (
     <div style={styles.analysisItem}>
@@ -143,6 +145,15 @@ const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetri
         {isExpanded && (
           <div style={styles.expandedContent}>
             <div style={styles.divider} />
+
+            {/* Fallback: many models now return unstructured feedback without the old headings.
+                If we can't parse structured sections, show the full feedback here so "Deep Dive" still works. */}
+            {!hasStructuredDetails && (
+              <div style={styles.detailSection}>
+                <div style={styles.detailLabel}>FULL FEEDBACK</div>
+                <p style={styles.meaningText}>{feedback}</p>
+              </div>
+            )}
             
             {parsed.evidence.length > 0 && (
               <div style={styles.detailSection}>
