@@ -25,6 +25,35 @@ interface HistoryProps {
   onSelectSession?: (session: any) => void;
 }
 
+function countWordsSafe(text: unknown): number {
+  if (typeof text !== 'string') return 0;
+  const t = text.trim();
+  if (!t) return 0;
+  return t.split(/\s+/).filter(Boolean).length;
+}
+
+function isInsufficientSpeechSession(session: any): boolean {
+  // Prefer persisted word_count if available
+  const wcField = typeof session.wordCount === 'number' ? session.wordCount : undefined;
+  const wc = typeof wcField === 'number' && Number.isFinite(wcField) ? wcField : countWordsSafe(session.transcript);
+
+  if (wc > 0 && wc < 25) return true;
+
+  // Some legacy guarded analyses stored wordCount=0; use heuristic from fullAnalysisJson
+  const raw = session.fullAnalysisJson;
+  if (!raw) return false;
+  try {
+    const analysis = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const issue = String(analysis?.priorityImprovements?.[0]?.issue || '');
+    const feedback = String(analysis?.contentAnalysis?.topicAdherence?.feedback || '');
+    if (/no usable speech detected/i.test(issue)) return true;
+    if (/INSUFFICIENT SPEECH DATA/i.test(feedback)) return true;
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 // Helper to format duration with bug fix (rounding)
 function formatDuration(seconds: number): string {
   const rounded = Math.round(seconds);
@@ -34,14 +63,18 @@ function formatDuration(seconds: number): string {
 }
 
 function calculateStdDev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const avg = values.reduce((a, b) => a + b, 0) / values.length;
-  const squareDiffs = values.map(v => Math.pow(v - avg, 2));
-  const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / values.length;
+  if (!values || values.length < 2) return 0;
+  // Filter out NaNs just in case
+  const validValues = values.filter(v => typeof v === 'number' && !isNaN(v));
+  if (validValues.length < 2) return 0;
+
+  const avg = validValues.reduce((a, b) => a + b, 0) / validValues.length;
+  const squareDiffs = validValues.map(v => Math.pow(v - avg, 2));
+  const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / validValues.length;
   return Math.sqrt(avgSquareDiff);
 }
 
-// Helper to safely extract duration
+  // Helper to safely extract duration
 function getSessionDuration(session: any): number {
   if (typeof session.durationSeconds === 'number' && session.durationSeconds > 0) {
     return session.durationSeconds;
@@ -57,8 +90,10 @@ function getSessionDuration(session: any): number {
         if (analysis?.speechStats?.duration) {
              const d = analysis.speechStats.duration; // "MM:SS"
              if (typeof d === 'string' && d.includes(':')) {
-                 const [m, s] = d.split(':').map(Number);
-                 return (m * 60) + s;
+                 const parts = d.split(':').map(Number);
+                 if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                    return (parts[0] * 60) + parts[1];
+                 }
              }
         }
       } catch (e) {
@@ -68,8 +103,10 @@ function getSessionDuration(session: any): number {
   
   // Fallback to older string field
   if (typeof session.duration === 'string' && session.duration.includes(':')) {
-       const [m, s] = session.duration.split(':').map(Number);
-       return (m * 60) + s;
+       const parts = session.duration.split(':').map(Number);
+       if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          return (parts[0] * 60) + parts[1];
+       }
   }
 
   return 0;
@@ -139,55 +176,25 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     return sessionsData;
   }, [sessionsData]);
 
-  const sessionsForList = useMemo(() => [...sessions].reverse(), [sessions]);
-
-  // DUPLICATE DETECTION AND CLEANUP
-  const [duplicateIds, setDuplicateIds] = useState<string[]>([]);
-  const [isCleaning, setIsCleaning] = useState(false);
-
-  useEffect(() => {
-    if (!sessions.length) return;
-
-    const uniqueKeys = new Map<string, any>(); // key -> oldest session
-    const dupeIds: string[] = [];
-
-    // Process sorted sessions (oldest first due to previous sort)
-    sessions.forEach(session => {
-       // Create a unique key based on content
-       // Use theme, quote, and transcript snippet
-       const key = `${session.theme}-${session.quote}-${(session.transcript || '').substring(0, 50)}`;
-       
-       if (uniqueKeys.has(key)) {
-         // This is a duplicate (since we are iterating oldest to newest)
-         dupeIds.push(session.id);
-       } else {
-         uniqueKeys.set(key, session);
-       }
+  // Canonical sessions used for ALL analytics:
+  // - Remove duplicates (videoFilename stable per recording; fallback to content key)
+  // - Exclude insufficient-length guarded sessions (should not affect trends/metrics)
+  const sessionsCanonical = useMemo(() => {
+    const seen = new Set<string>();
+    // sessions are oldest->newest; keep the first occurrence (oldest) for stability
+    return sessions.filter((s: any) => {
+      if (isInsufficientSpeechSession(s)) return false;
+      const key = s.videoFilename || `${s.theme}-${s.quote}-${String(s.transcript || '').substring(0, 50)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
-
-    setDuplicateIds(dupeIds);
   }, [sessions]);
 
-  const handleCleanup = async () => {
-     if (!duplicateIds.length) return;
-     if (!confirm(`Delete ${duplicateIds.length} duplicate sessions?`)) return;
-     
-     setIsCleaning(true);
-     try {
-       // Batch delete
-       const { error } = await supabase.from('sessions').delete().in('id', duplicateIds);
-       if (error) throw error;
-       
-       // Update local state to remove deleted
-       setSessionsData(prev => prev.filter(s => !duplicateIds.includes(s.id)));
-       setDuplicateIds([]);
-     } catch (e) {
-       console.error("Cleanup failed", e);
-       alert("Failed to cleanup duplicates");
-     } finally {
-       setIsCleaning(false);
-     }
-  };
+  // List should show newest first
+  const sessionsForList = useMemo(() => {
+    return [...sessionsCanonical].reverse();
+  }, [sessionsCanonical]);
 
   // Helper: Get Avg Score
   const getSessionAvgScore = (session: any): number => {
@@ -200,8 +207,8 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   };
 
   // 1. Calculate Aggregates
-  const totalSessions = sessions.length;
-  const scores = sessions.map(getSessionAvgScore);
+  const totalSessions = sessionsCanonical.length;
+  const scores = sessionsCanonical.map(getSessionAvgScore);
   const averageScore = totalSessions > 0 ? scores.reduce((a, b) => a + b, 0) / totalSessions : 0;
   
   // 2. Metric: Consistency (Based on Std Dev)
@@ -216,12 +223,12 @@ function History({ onClose, onSelectSession }: HistoryProps) {
 
   // 3. Metric: Avg Duration
   const avgDurationSecs = totalSessions > 0 
-    ? sessions.reduce((sum, s) => sum + (getSessionDuration(s) || 0), 0) / totalSessions 
+    ? sessionsCanonical.reduce((sum, s) => sum + (getSessionDuration(s) || 0), 0) / totalSessions 
     : 0;
   const isDurationShort = avgDurationSecs < 180;
 
   // 4. Metric: Training Frequency
-  const firstSessionTime = sessions.length > 0 ? sessions[0].createdAt : Date.now();
+  const firstSessionTime = sessionsCanonical.length > 0 ? sessionsCanonical[0].createdAt : Date.now();
   const weeksActive = Math.max(1, (Date.now() - firstSessionTime) / (1000 * 60 * 60 * 24 * 7));
   const sessionsPerWeek = totalSessions / weeksActive;
   let freqLabel = "LOW";
@@ -232,13 +239,13 @@ function History({ onClose, onSelectSession }: HistoryProps) {
 
   // 5. Metric: Avg Pace
   const avgWpm = totalSessions > 0
-    ? sessions.reduce((sum, s) => sum + (s.wpm || s.wordsPerMinute || 0), 0) / totalSessions
+    ? sessionsCanonical.reduce((sum, s) => sum + (s.wpm || s.wordsPerMinute || 0), 0) / totalSessions
     : 0;
   const isPaceBad = avgWpm < 120 || avgWpm > 180;
 
   // 6. Metric: Filler Words / Min
   const avgFillersPerMin = totalSessions > 0
-    ? sessions.reduce((sum, s) => {
+    ? sessionsCanonical.reduce((sum, s) => {
         const durMin = Math.max(0.5, (getSessionDuration(s) || 0) / 60);
         return sum + ((s.fillerCount || 0) / durMin);
       }, 0) / totalSessions
@@ -247,7 +254,7 @@ function History({ onClose, onSelectSession }: HistoryProps) {
 
   // 7. Metric: Structure Score (Content Avg)
   const avgContentScore = totalSessions > 0
-    ? sessions.reduce((sum, s) => sum + (s.contentScore || 0), 0) / totalSessions
+    ? sessionsCanonical.reduce((sum, s) => sum + (s.contentScore || 0), 0) / totalSessions
     : 0;
   const isStructureWeak = avgContentScore < 6.0;
 
@@ -314,7 +321,7 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   const priorityList = useMemo(() => {
     const counts: Record<string, { count: number; impact: string; action: string; originalTitle: string }> = {};
 
-    sessions.forEach(s => {
+    sessionsCanonical.forEach(s => {
       let analysis: any = s.fullAnalysisJson;
       // Handle stringified JSON if necessary
       if (typeof analysis === 'string') {
@@ -325,8 +332,9 @@ function History({ onClose, onSelectSession }: HistoryProps) {
         }
       }
 
-      if (analysis?.priorityImprovements) {
+      if (analysis?.priorityImprovements && Array.isArray(analysis.priorityImprovements)) {
         analysis.priorityImprovements.forEach((pi: any) => {
+          if (!pi) return;
           // Normalize issue text to group similar ones
           const title = pi.issue; 
           if (title) {
@@ -379,11 +387,11 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     }
 
     return sorted.slice(0, 3);
-  }, [sessions, avgContentScore, avgWpm, avgFillersPerMin, totalSessions]);
+  }, [sessionsCanonical, avgContentScore, avgWpm, avgFillersPerMin, totalSessions]);
 
 
   // Chart Data Preparation
-  const chartData = sessions.map((s, i) => ({
+  const chartData = sessionsCanonical.map((s, i) => ({
     session: i + 1,
     score: getSessionAvgScore(s),
   }));
@@ -466,25 +474,6 @@ function History({ onClose, onSelectSession }: HistoryProps) {
       <div style={styles.header}>
         <div style={styles.headerTopRow}>
            <button onClick={onClose} style={styles.backButton} className="hover-link">← Back to Dashboard</button>
-           {duplicateIds.length > 0 && (
-             <button 
-               onClick={handleCleanup} 
-               disabled={isCleaning}
-               style={{
-                 marginLeft: 'auto',
-                 background: '#fee2e2',
-                 color: '#dc2626',
-                 border: '1px solid #fecaca',
-                 padding: '6px 12px',
-                 borderRadius: '6px',
-                 fontSize: '0.85rem',
-                 fontWeight: 600,
-                 cursor: isCleaning ? 'wait' : 'pointer'
-               }}
-             >
-               {isCleaning ? 'Cleaning...' : `Remove ${duplicateIds.length} Duplicates`}
-             </button>
-           )}
         </div>
         <h1 style={styles.title}>Performance History</h1>
         <p style={styles.subtitle}>Detailed analysis of your competitive progress</p>

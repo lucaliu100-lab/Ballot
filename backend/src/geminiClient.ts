@@ -456,34 +456,34 @@ function normalizePriorityImprovements(
     items.push(x);
   }
 
-      // If we still need more, choose based on lowest sub-scores (largest gaps).
-      const scoreMap: Array<{ key: string; score: number }> = [];
-      const pushScore = (key: string, score: any) => scoreMap.push({ key, score: safeNumber(score, 10) });
-    
-      try {
-        pushScore('content.argumentStructure', analysis.contentAnalysis?.argumentStructure?.score);
-        pushScore('content.depthOfAnalysis', analysis.contentAnalysis?.depthOfAnalysis?.score);
-        pushScore('content.examplesEvidence', analysis.contentAnalysis?.examplesEvidence?.score);
-        pushScore('content.topicAdherence', analysis.contentAnalysis?.topicAdherence?.score);
-        pushScore('content.timeManagement', analysis.contentAnalysis?.timeManagement?.score);
-    
-        pushScore('delivery.vocalVariety', analysis.deliveryAnalysis?.vocalVariety?.score);
-        pushScore('delivery.pacing', analysis.deliveryAnalysis?.pacing?.score);
-        pushScore('delivery.articulation', analysis.deliveryAnalysis?.articulation?.score);
-        pushScore('delivery.fillerWords', analysis.deliveryAnalysis?.fillerWords?.score);
-    
-        pushScore('language.vocabulary', analysis.languageAnalysis?.vocabulary?.score);
-        pushScore('language.rhetoricalDevices', analysis.languageAnalysis?.rhetoricalDevices?.score);
-        pushScore('language.emotionalAppeal', analysis.languageAnalysis?.emotionalAppeal?.score);
-        pushScore('language.logicalAppeal', analysis.languageAnalysis?.logicalAppeal?.score);
-    
-        pushScore('body.eyeContact', analysis.bodyLanguageAnalysis?.eyeContact?.score);
-        pushScore('body.gestures', analysis.bodyLanguageAnalysis?.gestures?.score);
-        pushScore('body.posture', analysis.bodyLanguageAnalysis?.posture?.score);
-        pushScore('body.stagePresence', analysis.bodyLanguageAnalysis?.stagePresence?.score);
-      } catch {
-        // ignore
-      }
+  // If we still need more, choose based on lowest sub-scores (largest gaps).
+  const scoreMap: Array<{ key: string; score: number }> = [];
+  const pushScore = (key: string, score: any) => scoreMap.push({ key, score: safeNumber(score, 10) });
+
+  try {
+    pushScore('content.argumentStructure', analysis.contentAnalysis?.argumentStructure?.score);
+    pushScore('content.depthOfAnalysis', analysis.contentAnalysis?.depthOfAnalysis?.score);
+    pushScore('content.examplesEvidence', analysis.contentAnalysis?.examplesEvidence?.score);
+    pushScore('content.topicAdherence', analysis.contentAnalysis?.topicAdherence?.score);
+    pushScore('content.timeManagement', analysis.contentAnalysis?.timeManagement?.score);
+
+    pushScore('delivery.vocalVariety', analysis.deliveryAnalysis?.vocalVariety?.score);
+    pushScore('delivery.pacing', analysis.deliveryAnalysis?.pacing?.score);
+    pushScore('delivery.articulation', analysis.deliveryAnalysis?.articulation?.score);
+    pushScore('delivery.fillerWords', analysis.deliveryAnalysis?.fillerWords?.score);
+
+    pushScore('language.vocabulary', analysis.languageAnalysis?.vocabulary?.score);
+    pushScore('language.rhetoricalDevices', analysis.languageAnalysis?.rhetoricalDevices?.score);
+    pushScore('language.emotionalAppeal', analysis.languageAnalysis?.emotionalAppeal?.score);
+    pushScore('language.logicalAppeal', analysis.languageAnalysis?.logicalAppeal?.score);
+
+    pushScore('body.eyeContact', analysis.bodyLanguageAnalysis?.eyeContact?.score);
+    pushScore('body.gestures', analysis.bodyLanguageAnalysis?.gestures?.score);
+    pushScore('body.posture', analysis.bodyLanguageAnalysis?.posture?.score);
+    pushScore('body.stagePresence', analysis.bodyLanguageAnalysis?.stagePresence?.score);
+  } catch {
+    // ignore
+  }
 
   const templates: Record<string, { issue: string; action: string; impact: string }> = {
     'content.argumentStructure': {

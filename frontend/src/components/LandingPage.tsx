@@ -3,38 +3,39 @@ import React, { useState } from 'react';
 interface LandingPageProps {
   onStart: () => void;
   onSignIn: () => void;
+  isAuthenticated?: boolean;
+  userEmail?: string;
+  onSignOut?: () => void;
+  onDashboardClick?: () => void;
+  onHistoryClick?: () => void;
 }
 
-function LandingPage({ onStart, onSignIn }: LandingPageProps) {
+function LandingPage({ 
+  onStart, 
+  onSignIn, 
+}: LandingPageProps) {
   const [hoverPrimary, setHoverPrimary] = useState(false);
   const [hoverFooter, setHoverFooter] = useState(false);
-  const [hoverSignIn, setHoverSignIn] = useState(false);
+
+  const Divider = () => (
+    <div style={{
+      width: '100%',
+      maxWidth: '1280px',
+      height: '1px',
+      background: '#f3f4f6', // Light gray
+      margin: '60px 0',
+    }} />
+  );
 
   return (
     <div style={styles.container} className="landing-page">
-      {/* Navigation Bar */}
-      <div style={styles.navbar}>
-        <div style={styles.navbarContent}>
-          <div style={styles.logo}>BALLOT</div>
-          <button 
-            onClick={onSignIn}
-            onMouseEnter={() => setHoverSignIn(true)}
-            onMouseLeave={() => setHoverSignIn(false)}
-            style={{
-              ...styles.signInLink,
-              ...(hoverSignIn ? styles.signInLinkHover : {})
-            }}
-          >
-            Sign In
-          </button>
-        </div>
-      </div>
+      {/* Navbar is now handled by parent App component */}
 
       {/* Hero Section */}
       <div style={styles.heroSection}>
-        <h1 style={styles.headline}>Elevate Your Competitive Debating</h1>
+        <h1 style={styles.headline}>Master Impromptu Speaking</h1>
         <p style={styles.subtitle}>
-          A professional training platform for competitive debaters with AI-powered performance analysis for tournament preparation.
+          A professional training platform for impromptu speakers with AI-powered performance analysis for tournament preparation.
         </p>
 
         <div style={styles.buttonGroup}>
@@ -47,13 +48,16 @@ function LandingPage({ onStart, onSignIn }: LandingPageProps) {
               ...(hoverPrimary ? styles.primaryButtonHover : {}),
             }}
           >
-            Start Training Session
+            Start Impromptu Session
           </button>
         </div>
       </div>
 
+      <Divider />
+
       {/* Judging System Section */}
       <div style={styles.contentSection}>
+        <div style={styles.badge}>Currently Available: Impromptu Speaking</div>
         <h2 style={styles.sectionTitle}>Judging System</h2>
         <p style={styles.sectionDesc}>
           The platform uses NSDA standard impromptu evaluation criteria with multimodal AI analysis of video, audio, transcript, and body language to provide tournament-grade feedback.
@@ -82,6 +86,8 @@ function LandingPage({ onStart, onSignIn }: LandingPageProps) {
           System maintains strict tournament standards including length validation where speeches under 3 minutes receive content penalties, filler word tracking with counts per minute, and comprehensive structural analysis of arguments, transitions, and conclusions.
         </p>
       </div>
+
+      <Divider />
 
       {/* Performance Tiers Section */}
       <div style={styles.contentSection}>
@@ -119,6 +125,8 @@ function LandingPage({ onStart, onSignIn }: LandingPageProps) {
         </div>
       </div>
 
+      <Divider />
+
       {/* How It Works Section */}
       <div style={styles.contentSection}>
         <h2 style={styles.sectionTitle}>How It Works</h2>
@@ -142,6 +150,8 @@ function LandingPage({ onStart, onSignIn }: LandingPageProps) {
         </div>
       </div>
 
+      <Divider />
+
       {/* Footer Call to Action */}
       <div style={styles.footerSection}>
         <p style={styles.footerText}>Ready to begin your tournament preparation journey</p>
@@ -154,7 +164,7 @@ function LandingPage({ onStart, onSignIn }: LandingPageProps) {
             ...(hoverFooter ? styles.primaryButtonHover : {}),
           }}
         >
-          Start Training Session
+          Start Impromptu Session
         </button>
       </div>
 
@@ -189,7 +199,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: '100vh',
     width: '100%',
     background: '#ffffff',
-    backgroundImage: 'radial-gradient(#e5e7eb 1px, transparent 1px)',
+    backgroundImage: 'radial-gradient(rgba(0,0,0,0.03) 1px, transparent 1px)',
     backgroundSize: '32px 32px',
     display: 'flex',
     flexDirection: 'column',
@@ -197,51 +207,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'Segoe UI', system-ui, sans-serif",
     padding: '0 24px',
   },
-  navbar: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '64px',
-    background: '#ffffff',
-    borderBottom: '1px solid #f3f4f6',
-    display: 'flex',
-    justifyContent: 'center',
-    padding: '0 24px',
-    zIndex: 1000,
-  },
-  navbarContent: {
-    width: '100%',
-    maxWidth: '1280px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  logo: {
-    fontSize: '20px',
-    fontWeight: 800,
-    color: '#000000',
-    letterSpacing: '0.05em',
-  },
-  signInLink: {
-    background: 'none',
-    border: 'none',
-    fontSize: '15px',
-    color: '#6b7280',
-    fontWeight: 500,
-    cursor: 'pointer',
-    padding: '8px',
-    transition: 'color 0.2s ease',
-  },
-  signInLinkHover: {
-    color: '#000000',
-    textDecoration: 'underline',
-  },
+  // Removed navbar styles
   heroSection: {
     maxWidth: '1280px',
     width: '100%',
-    paddingTop: '200px', // Adjusted for navbar + spacing
-    paddingBottom: '120px',
+    paddingTop: '96px', // Adjusted to account for fixed navbar (64px handled by App padding) + extra visual space
+    // App uses padding-top 64px, so this 96px is ADDITIONAL to that. 
+    // Wait, App has paddingTop: 64px. So LandingPage starts at y=64px.
+    // If we want 160px visual from top, we need 96px here.
+    // However, in "unauthenticated" mode App also adds padding-top 64px.
+    // So 96px is correct relative to the container start.
+    paddingBottom: '60px', 
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -273,33 +249,44 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#ffffff',
     border: 'none',
     borderRadius: '8px',
-    padding: '18px 40px', // Slightly larger
-    fontSize: '1.1rem',   // Slightly larger
+    padding: '18px 40px',
+    fontSize: '1.1rem',
     fontWeight: 600,
     cursor: 'pointer',
-    transition: 'background-color 0.2s ease',
+    transition: 'all 0.2s ease',
     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
   },
   primaryButtonHover: {
     background: '#222222',
-    transform: 'translateY(-1px)',
+    transform: 'translateY(-2px)',
+    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
   },
   
   // Content Sections
   contentSection: {
     maxWidth: '1000px',
     width: '100%',
-    marginBottom: '120px', // Increased from 80/100 to 120
+    marginBottom: '0', // Margin handled by dividers
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     textAlign: 'center',
   },
+  badge: {
+    fontSize: '14px',
+    color: '#6b7280',
+    background: '#f3f4f6',
+    padding: '6px 16px',
+    borderRadius: '20px',
+    marginBottom: '24px',
+    fontWeight: 500,
+    letterSpacing: '0.02em',
+  },
   sectionTitle: {
     fontSize: '28px',
     fontWeight: 700,
     color: '#000000',
-    marginTop: '40px',
+    marginTop: '0', // Adjusting margin top since badge or divider comes before
     marginBottom: '24px',
   },
   sectionDesc: {
@@ -327,7 +314,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     borderRight: '1px solid #e5e7eb',
-    background: '#ffffff',
+    background: '#f9fafb', // Light gray background
   },
   categoryName: {
     fontWeight: 700,
@@ -358,17 +345,18 @@ const styles: Record<string, React.CSSProperties> = {
   tierItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: '20px', // Increased spacing
-    padding: '16px', // Increased padding
+    gap: '20px',
+    padding: '16px',
     borderRadius: '8px',
-    border: '1px solid #e5e7eb', // Subtle border
+    border: '1px solid #e5e7eb',
     background: '#ffffff',
   },
   tierSquare: {
-    width: '16px', // Increased size
-    height: '16px', // Increased size
+    width: '16px',
+    height: '16px',
     borderRadius: '3px',
     flexShrink: 0,
+    marginRight: '2px', // Added 2px spacing specifically as requested
   },
   tierInfo: {
     display: 'flex',

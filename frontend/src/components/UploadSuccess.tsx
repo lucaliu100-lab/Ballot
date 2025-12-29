@@ -129,65 +129,76 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
 
   return (
     <div style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>Evaluating Your Performance</h1>
-        <p style={styles.subtitle}>
-          Applying NSDA Championship Standards to your recording...
-        </p>
-      </div>
-
-      <div style={styles.mainContent}>
-        <div style={styles.progressSection}>
-          <div style={styles.progressBar}>
-            <div 
-              style={{
-                ...styles.progressFill,
-                width: `${progress}%`,
-              }} 
-            />
-          </div>
-          <p style={styles.progressText}>
-            {isProcessing ? `Analysis in progress: ${Math.floor(progress)}%` : error ? 'Error occurred' : 'Analysis complete!'}
+      <div style={styles.inner}>
+        <div style={styles.header}>
+          <div style={styles.kicker}>CHAMPIONSHIP BALLOT</div>
+          <h1 style={styles.title}>Evaluating Your Performance</h1>
+          <p style={styles.subtitle}>
+            Applying NSDA Championship Standards to your recording
           </p>
         </div>
 
-        {error && (
-          <div style={styles.errorBox}>
-            <p style={styles.errorText}>{error}</p>
-            {errorDetails && (
-              <details style={styles.errorDetails}>
-                <summary style={styles.errorDetailsSummary}>Technical details</summary>
-                <pre style={styles.errorDetailsPre}>{errorDetails}</pre>
-              </details>
-            )}
-            <button
-              onClick={() => window.location.reload()}
-              style={styles.retryButton}
-            >
-              Restart
-            </button>
-          </div>
-        )}
-
-        <div style={styles.stepList}>
-          <div style={styles.stepItem}>
-            <div style={isProcessing ? styles.spinner : styles.doneIcon}>
-              {isProcessing ? '' : '✓'}
-            </div>
-            <div style={styles.stepContent}>
-              <h3 style={styles.stepTitle}>Championship Evaluation</h3>
-              <p style={styles.stepDesc}>
-                Conducting full technical analysis of argument structure, delivery metrics, and body language under competitive tournament conditions.
-              </p>
+        <div style={styles.mainContent}>
+          <div style={styles.progressSection}>
+            <p style={styles.progressText}>
+              {isProcessing ? `Analysis in progress: ${Math.floor(progress)}%` : error ? 'Error occurred' : 'Analysis complete!'}
+            </p>
+            <div style={styles.progressBar}>
+              <div 
+                style={{
+                  ...styles.progressFill,
+                  width: `${progress}%`,
+                }} 
+              />
             </div>
           </div>
-        </div>
 
-        <div style={styles.contextBox}>
-          <p style={styles.contextLabel}>Theme: <span style={styles.contextValue}>{theme}</span></p>
-          <p style={styles.contextLabel}>Quote: <span style={styles.contextQuote}>"{quote}"</span></p>
+          {error && (
+            <div style={styles.errorBox}>
+              <p style={styles.errorText}>{error}</p>
+              {errorDetails && (
+                <details style={styles.errorDetails}>
+                  <summary style={styles.errorDetailsSummary}>Technical details</summary>
+                  <pre style={styles.errorDetailsPre}>{errorDetails}</pre>
+                </details>
+              )}
+              <button
+                onClick={() => window.location.reload()}
+                style={styles.retryButton}
+              >
+                Restart
+              </button>
+            </div>
+          )}
+
+          <div style={styles.stepList}>
+            <div style={styles.stepItem}>
+              <div style={isProcessing ? styles.spinner : styles.doneIcon}>
+                {isProcessing ? '' : '✓'}
+              </div>
+              <div style={styles.stepContent}>
+                <h3 style={styles.stepTitle}>Championship Evaluation</h3>
+                <p style={styles.stepDesc}>
+                  Conducting full technical analysis of argument structure, delivery metrics, and body language under competitive tournament conditions.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div style={styles.contextBox}>
+            <p style={styles.contextLabel}>Theme: <span style={styles.contextValue}>{theme}</span></p>
+            <p style={styles.contextLabel}>Quote: <span style={styles.contextQuote}>"{quote}"</span></p>
+          </div>
         </div>
       </div>
+
+      {/* Local keyframes (avoid global stylesheet injection) */}
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -197,43 +208,69 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     minHeight: '100vh',
-    padding: '80px 48px 120px 48px',
+    padding: '72px 24px 120px 24px',
     background: '#ffffff',
+    maxWidth: '1280px',
+    margin: '0 auto',
+    fontFamily: "'Segoe UI', system-ui, sans-serif",
+    alignItems: 'center',
+  },
+  inner: {
+    width: '100%',
+    maxWidth: '900px',
   },
   header: {
     marginBottom: '48px',
+    textAlign: 'center',
+  },
+  kicker: {
+    fontSize: '12px',
+    color: '#6b7280',
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    fontWeight: 600,
+    marginBottom: '10px',
   },
   title: {
     color: '#111111',
-    fontSize: '2.5rem',
+    fontSize: '36px',
     margin: '0 0 12px 0',
     fontWeight: 800,
     letterSpacing: '-0.02em',
   },
   subtitle: {
     color: '#666666',
-    fontSize: '1.2rem',
+    fontSize: '18px',
     margin: 0,
-    maxWidth: '600px',
+    maxWidth: '720px',
     lineHeight: 1.5,
+    marginLeft: 'auto',
+    marginRight: 'auto',
   },
   mainContent: {
-    maxWidth: '600px',
+    maxWidth: '720px',
+    marginLeft: 'auto',
+    marginRight: 'auto',
   },
   progressSection: {
     marginBottom: '48px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    alignItems: 'center',
   },
   progressBar: {
-    height: '4px',
+    width: '400px',
+    height: '8px',
     background: '#f0f0f0',
-    borderRadius: '2px',
+    borderRadius: '999px',
     overflow: 'hidden',
-    marginBottom: '16px',
   },
   progressFill: {
     height: '100%',
     background: '#000000',
-    transition: 'width 0.4s cubic-bezier(0.1, 0.7, 1.0, 0.1)', // Eased for "Zoom" effect at the end
+    borderRadius: '999px',
+    transition: 'width 400ms ease',
   },
   progressText: {
     color: '#111111',
@@ -248,8 +285,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     gap: '20px',
     padding: '24px',
-    background: '#fafafa',
-    border: '1px solid #eeeeee',
+    background: '#f9fafb',
+    border: '1px solid #e5e7eb',
     borderRadius: '12px',
     alignItems: 'flex-start',
   },
@@ -336,11 +373,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   contextBox: {
     padding: '24px',
-    border: '1px solid #eeeeee',
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
     borderRadius: '12px',
   },
   contextLabel: {
-    color: '#666666',
+    color: '#6b7280',
     fontSize: '0.9rem',
     margin: '0 0 8px 0',
   },
@@ -353,15 +391,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontStyle: 'italic',
   },
 };
-
-// Add the keyframes for the spinner
-const styleSheet = document.createElement("style");
-styleSheet.innerText = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(styleSheet);
 
 export default UploadSuccess;

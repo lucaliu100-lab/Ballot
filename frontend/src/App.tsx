@@ -36,7 +36,9 @@ import QuoteSelection from './components/QuoteSelection';
 import PrepTimer from './components/PrepTimer';
 import RecordScreen from './components/RecordScreen';
 import UploadSuccess from './components/UploadSuccess';
+import InsufficientSpeech from './components/InsufficientSpeech';
 import FeedbackReport from './components/FeedbackReport';
+import Navbar from './components/Navbar';
 import History from './components/History';
 import BallotView from './components/BallotView';
 
@@ -92,9 +94,12 @@ function App() {
 
   // Transcript (needed for saving to DB)
   const [transcript, setTranscript] = useState<string>('');
+  const [insufficientReason, setInsufficientReason] = useState<string>('');
+  const [insufficientWordCount, setInsufficientWordCount] = useState<number>(0);
 
   // Show history screen
   const [showHistory, setShowHistory] = useState(false);
+  const [showLanding, setShowLanding] = useState(false);
 
   // Loading state for changing theme
   const [isChangingTheme, setIsChangingTheme] = useState(false);
@@ -230,6 +235,30 @@ function App() {
     isMock: boolean,
     transcriptData: string
   ) => {
+    const t = (transcriptData || '').trim();
+    const wc = t ? t.split(/\s+/).filter(Boolean).length : 0;
+
+    // Guard: do not proceed to ballot/report if transcript is too short to score competitively.
+    if (wc < 25) {
+      const hint =
+        analysisData?.contentAnalysis?.topicAdherence?.feedback ||
+        analysisData?.priorityImprovements?.[0]?.issue ||
+        '';
+      const match = typeof hint === 'string'
+        ? hint.match(/INSUFFICIENT SPEECH DATA:\s*(.+)$/im)
+        : null;
+
+      setInsufficientWordCount(wc);
+      setInsufficientReason(match?.[1]?.trim() || `Transcript too short to score competitively (${wc} words).`);
+
+      // Ensure we do NOT mount FeedbackReport (which saves to DB) for invalid sessions.
+      setAnalysis(null);
+      setIsFeedbackMock(false);
+      setTranscript(transcriptData);
+      setCurrentStep('insufficient');
+      return;
+    }
+
     setAnalysis(analysisData);
     setIsFeedbackMock(isMock);
     setTranscript(transcriptData);
@@ -254,6 +283,8 @@ function App() {
    * Resets everything and goes back to start
    */
   const handleGoHome = () => {
+    setShowHistory(false);
+    setShowLanding(false);
     setCurrentStep('start');
     setRoundData(null);
     setSelectedQuote('');
@@ -312,7 +343,12 @@ function App() {
     switch (currentStep) {
       case 'start':
         // Show the initial start screen
-        return <StartScreen onRoundStart={handleRoundStart} />;
+        return (
+          <StartScreen 
+            onRoundStart={handleRoundStart} 
+            onShowHistory={() => setShowHistory(true)}
+          />
+        );
 
       case 'theme-preview':
         // Show theme preview (only if we have round data)
@@ -368,6 +404,17 @@ function App() {
           />
         );
 
+      case 'insufficient':
+        return (
+          <InsufficientSpeech
+            wordCount={insufficientWordCount}
+            reason={insufficientReason}
+            onRedoRound={handleRedoRound}
+            onNewRound={handleNewRound}
+            onGoHome={handleGoHome}
+          />
+        );
+
       case 'report':
         // Show the feedback report (only if we have feedback)
         if (!analysis || !roundData) return null;
@@ -407,7 +454,12 @@ function App() {
         );
 
       default:
-        return <StartScreen onRoundStart={handleRoundStart} />;
+        return (
+          <StartScreen 
+            onRoundStart={handleRoundStart} 
+            onShowHistory={() => setShowHistory(true)}
+          />
+        );
     }
   };
 
@@ -438,16 +490,28 @@ function App() {
       );
     }
     return (
-      <LandingPage
-        onStart={() => {
-          setInitialAuthView('sign_in');
-          setShowLogin(true);
-        }}
-        onSignIn={() => {
-          setInitialAuthView('sign_in');
-          setShowLogin(true);
-        }}
-      />
+      <div style={{...styles.app, paddingTop: '64px'}}>
+        <Navbar
+          user={null}
+          onNavigateToLanding={() => {}} // Already on landing
+          onNavigateToDashboard={() => {}} // No dashboard for guest
+          onNavigateToHistory={() => {}} // No history for guest
+          onSignIn={() => {
+            setInitialAuthView('sign_in');
+            setShowLogin(true);
+          }}
+        />
+        <LandingPage
+          onStart={() => {
+            setInitialAuthView('sign_in');
+            setShowLogin(true);
+          }}
+          onSignIn={() => {
+            setInitialAuthView('sign_in');
+            setShowLogin(true);
+          }}
+        />
+      </div>
     );
   }
 
@@ -456,44 +520,59 @@ function App() {
     return <UpdatePassword onSuccess={() => setShowPasswordReset(false)} />;
   }
 
-  // ==========================================
-  // MAIN RENDER (AUTHENTICATED)
-  // ==========================================
-
-  // Show history screen if requested
-  if (showHistory) {
-    return <History onClose={() => setShowHistory(false)} onSelectSession={handleHistorySessionSelect} />;
+  // Show Landing Page if authenticated but showLanding is true
+  if (showLanding) {
+    return (
+      <div style={{...styles.app, paddingTop: '64px'}}>
+        <Navbar
+          user={user}
+          onNavigateToLanding={() => {}} // Stay on landing
+          onNavigateToDashboard={handleGoHome}
+          onNavigateToHistory={() => { setShowLanding(false); setShowHistory(true); }}
+          onSignOut={() => supabase.auth.signOut()}
+        />
+        
+        {/* Render Landing Page Content */}
+        <LandingPage
+          onStart={handleGoHome} // "Start Training Session" goes to Dashboard
+          onSignIn={() => {}} // Should not happen
+          isAuthenticated={true}
+          userEmail={user.email}
+          onSignOut={() => supabase.auth.signOut()}
+          onDashboardClick={handleGoHome}
+          onHistoryClick={() => { setShowLanding(false); setShowHistory(true); }}
+        />
+      </div>
+    );
   }
 
-  return (
-    <div style={styles.app}>
-      {/* User info header */}
-      <div style={styles.userHeader}>
-        <button 
-          onClick={() => setShowHistory(true)}
-          disabled={currentStep === 'record' || currentStep === 'processing'}
-          style={{
-            ...styles.historyButton,
-            opacity: (currentStep === 'record' || currentStep === 'processing') ? 0.5 : 1,
-            cursor: (currentStep === 'record' || currentStep === 'processing') ? 'not-allowed' : 'pointer',
-          }}
-          title={(currentStep === 'record' || currentStep === 'processing')
-            ? 'Finish recording/processing before opening History (prevents interrupting uploads)'
-            : 'Open History'}
-        >
-          History / Progress
-        </button>
-        <span style={styles.userEmail}>{user.email}</span>
-        <button 
-          onClick={() => supabase.auth.signOut()} 
-          style={styles.signOutButton}
-        >
-          Sign Out
-        </button>
-      </div>
+  // ==========================================
+  // MAIN RENDER (AUTHENTICATED APP)
+  // ==========================================
 
-      {/* Render the current step */}
-      {renderCurrentStep()}
+  // Determine if navbar is disabled or hidden
+  const isNavDisabled = currentStep === 'processing';
+  const shouldHideNav = currentStep === 'record';
+
+  return (
+    <div style={{...styles.app, paddingTop: shouldHideNav ? 0 : '64px'}}>
+      {!shouldHideNav && (
+        <Navbar
+          user={user}
+          onNavigateToLanding={() => setShowLanding(true)}
+          onNavigateToDashboard={handleGoHome}
+          onNavigateToHistory={() => setShowHistory(true)}
+          onSignOut={() => supabase.auth.signOut()}
+          disabled={isNavDisabled}
+        />
+      )}
+
+      {/* Render the current step or history */}
+      {showHistory ? (
+        <History onClose={() => setShowHistory(false)} onSelectSession={handleHistorySessionSelect} />
+      ) : (
+        renderCurrentStep()
+      )}
     </div>
   );
 }
@@ -528,37 +607,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#666666',
     marginTop: '16px',
     fontSize: '1rem',
-  },
-  userHeader: {
-    position: 'fixed',
-    top: '16px',
-    right: '16px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    zIndex: 100,
-  },
-  userEmail: {
-    color: '#666666',
-    fontSize: '0.85rem',
-  },
-  signOutButton: {
-    background: '#ffffff',
-    color: '#333333',
-    border: '1px solid #000000',
-    padding: '6px 12px',
-    fontSize: '0.8rem',
-    borderRadius: '6px',
-    cursor: 'pointer',
-  },
-  historyButton: {
-    background: '#000000',
-    color: '#ffffff',
-    border: '1px solid #000000',
-    padding: '6px 12px',
-    fontSize: '0.8rem',
-    borderRadius: '6px',
-    cursor: 'pointer',
   },
 };
 

@@ -120,5 +120,6 @@ export type FlowStep =
   | 'prep'           // Preparation timer countdown
   | 'record'         // Camera preview and recording
   | 'processing'     // Processing audio and video
+  | 'insufficient'   // Transcript/audio too short to score competitively
   | 'report'         // Final feedback report (live)
   | 'ballot';        // Viewing a past ballot (fetched by ID)

@@ -28,9 +28,10 @@ function getScoreColor(score: number): string {
   return '#dc2626'; // Poor (red)
 }
 
-// Generate a unique hash from session content to prevent duplicates
-function generateSessionHash(theme: string, quote: string, transcript: string, createdAt: number): string {
-  const content = `${theme}-${quote}-${transcript.substring(0, 100)}-${createdAt}`;
+// Generate a deterministic hash from session content to prevent duplicates.
+// IMPORTANT: Do NOT include timestamps here; the goal is stability across re-mounts.
+function generateSessionHash(theme: string, quote: string, transcript: string, videoFilename: string): string {
+  const content = `${theme}-${quote}-${transcript.substring(0, 200)}-${videoFilename}`;
   let hash = 0;
   for (let i = 0; i < content.length; i++) {
     const char = content.charCodeAt(i);
@@ -197,19 +198,20 @@ function FeedbackReport({
   // Track if we've already saved this session
   const savedRef = useRef(false);
   
-  // Generate a stable session ID based on content (prevents duplicates on re-render)
-  const sessionCreatedAt = useRef(Date.now());
+  // Generate a stable session key based on content (prevents duplicates across re-mounts)
   const sessionId = useMemo(() => {
-    return generateSessionHash(theme, quote, transcript, sessionCreatedAt.current);
-  }, [theme, quote, transcript]);
+    return generateSessionHash(theme, quote, transcript, videoFilename || 'no_video');
+  }, [theme, quote, transcript, videoFilename]);
 
   // ===========================================
   // SAVE SESSION TO INSTANTDB
   // ===========================================
 
   useEffect(() => {
-    // Only save once per feedback session using sessionId as key
-    const saveKey = `saved_session_${sessionId}`;
+    // Only save once per feedback session using a stable key.
+    // Prefer videoFilename because it is stable per recording/upload.
+    const stableKey = videoFilename ? `video_${videoFilename}` : `hash_${sessionId}`;
+    const saveKey = `saved_session_${stableKey}`;
     
     // Check if already saved (both in ref and sessionStorage for page refresh protection)
     if (savedRef.current || sessionStorage.getItem(saveKey) || readOnly) {
@@ -235,19 +237,26 @@ function FeedbackReport({
            return;
         }
 
-          // Check if already saved in Supabase to prevent duplicates
-          const { data: existing } = await supabase
+        // Check if already saved in Supabase to prevent duplicates.
+        // Use a stable identifier: the uploaded video filename is unique per recording.
+        if (videoFilename) {
+          const { data: existing, error: existingError } = await supabase
             .from('sessions')
             .select('id')
             .eq('user_id', user.id)
-            .eq('created_at', new Date(sessionCreatedAt.current).toISOString())
+            .eq('video_filename', videoFilename)
             .maybeSingle();
 
-          if (existing) {
-             console.log('📝 Skipping save - session already exists in DB');
-             savedRef.current = true;
-             return;
+          if (existingError) {
+            // Don't hard fail saving if the lookup fails; we'll attempt insert and rely on sessionStorage
+            console.warn('⚠️ Duplicate-check lookup failed, will attempt insert:', existingError.message);
+          } else if (existing) {
+            console.log('📝 Skipping save - session already exists in DB (video_filename match)');
+            savedRef.current = true;
+            sessionStorage.setItem(saveKey, 'true');
+            return;
           }
+        }
 
         const { error } = await supabase.from('sessions').insert({
             user_id: user.id,
@@ -272,7 +281,6 @@ function FeedbackReport({
             practice_drill: analysis.practiceDrill,
             // Meta
             video_filename: videoFilename,
-            created_at: new Date(sessionCreatedAt.current).toISOString(),
             // Store full analysis as JSON string for future-proofing
             full_analysis_json: JSON.stringify(analysis),
         });

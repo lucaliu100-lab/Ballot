@@ -63,7 +63,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return setError('Please fill in all fields');
-    
+
     setIsLoading(true);
     setError(null);
     try {
@@ -82,7 +82,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return setError('Please fill in all fields');
-    
+
     setIsLoading(true);
     setError(null);
     try {
@@ -213,7 +213,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
                 >
                   Forgot password?
                 </button>
-              </div>
+          </div>
               <button 
                 type="submit" 
                 style={styles.primaryButton}
@@ -247,14 +247,14 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
             </div>
 
             <form onSubmit={handleSignUp} style={styles.form}>
-              <label style={styles.label}>Email Address</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                style={styles.input}
-                disabled={isLoading}
+            <label style={styles.label}>Email Address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              style={styles.input}
+              disabled={isLoading}
               />
               <label style={styles.label}>Create Password</label>
               <input
@@ -264,15 +264,15 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
                 placeholder="Min. 6 characters"
                 style={styles.input}
                 disabled={isLoading}
-              />
-              <button 
-                type="submit" 
+            />
+            <button 
+              type="submit" 
                 style={styles.primaryButton}
                 disabled={isLoading}
-              >
+            >
                 {isLoading ? 'Creating Account...' : 'Sign Up'}
-              </button>
-            </form>
+            </button>
+          </form>
 
             <p style={styles.footerText}>
               Already have an account?{' '}
@@ -309,7 +309,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
               {isLoading ? 'Sending...' : 'Send Reset Link'}
             </button>
             
-            <button 
+            <button
               type="button"
               onClick={() => { setView('sign_in'); setError(null); }}
               style={styles.secondaryButton}
