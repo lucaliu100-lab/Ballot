@@ -120,7 +120,7 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
       console.log('🎬 Start Round: requesting /api/start-round...');
 
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 30_000); // 30s for Render free tier cold starts
 
       const response = await fetch(API_ENDPOINTS.startRound, {
         method: 'POST',

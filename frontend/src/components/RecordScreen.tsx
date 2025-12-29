@@ -181,6 +181,21 @@ function RecordScreen({
           audio: true,
         });
 
+        // CRITICAL: Verify that we actually got an audio track
+        const audioTracks = stream.getAudioTracks();
+        const videoTracks = stream.getVideoTracks();
+        
+        console.log(`🎤 Media stream initialized: ${videoTracks.length} video track(s), ${audioTracks.length} audio track(s)`);
+        
+        if (audioTracks.length === 0) {
+          // Audio permission denied or no microphone available
+          setError(
+            '⚠️ No microphone detected. Your recording will have no audio and cannot be scored. Please check your microphone permissions and device settings, then refresh the page.'
+          );
+        } else {
+          console.log(`✅ Audio track active: ${audioTracks[0].label || 'default'}`);
+        }
+
         // Store the stream reference
         streamRef.current = stream;
 
@@ -190,7 +205,7 @@ function RecordScreen({
         }
       } catch (err) {
         // Handle errors (user denied permission, no camera, etc.)
-        console.error('Failed to access camera:', err);
+        console.error('Failed to access camera/microphone:', err);
         setError(
           'Unable to access camera/microphone. Please allow permissions and try again.'
         );
@@ -218,6 +233,15 @@ function RecordScreen({
     // Make sure we have a stream
     if (!streamRef.current) {
       setError('No media stream available');
+      return;
+    }
+
+    // CRITICAL: Verify audio tracks exist before recording
+    const audioTracks = streamRef.current.getAudioTracks();
+    if (audioTracks.length === 0) {
+      setError(
+        '❌ Cannot start recording: No microphone detected. Please check your microphone permissions and device settings, then refresh the page.'
+      );
       return;
     }
 

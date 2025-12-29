@@ -32,9 +32,9 @@ function LandingPage({
 
       {/* Hero Section */}
       <div style={styles.heroSection}>
-        <h1 style={styles.headline}>Master Impromptu Speaking</h1>
+        <h1 style={styles.headline}>Elevate Your Competitive Debating</h1>
         <p style={styles.subtitle}>
-          A professional training platform for impromptu speakers with AI-powered performance analysis for tournament preparation.
+          A professional training platform for competitive debaters with AI-powered performance analysis for tournament preparation.
         </p>
 
         <div style={styles.buttonGroup}>
@@ -47,7 +47,7 @@ function LandingPage({
               ...(hoverPrimary ? styles.primaryButtonHover : {}),
             }}
           >
-            Start Impromptu Session
+            Start Training Session
           </button>
         </div>
       </div>
@@ -56,7 +56,6 @@ function LandingPage({
 
       {/* Judging System Section */}
       <div style={styles.contentSection}>
-        <div style={styles.badge}>Currently Available: Impromptu Speaking</div>
         <h2 style={styles.sectionTitle}>Judging System</h2>
         <p style={styles.sectionDesc}>
           The platform uses NSDA standard impromptu evaluation criteria with multimodal AI analysis of video, audio, transcript, and body language to provide tournament-grade feedback.
@@ -163,7 +162,7 @@ function LandingPage({
             ...(hoverFooter ? styles.primaryButtonHover : {}),
           }}
         >
-          Start Impromptu Session
+          Start Training Session
         </button>
       </div>
 
@@ -271,21 +270,11 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     textAlign: 'center',
   },
-  badge: {
-    fontSize: '14px',
-    color: '#6b7280',
-    background: '#f3f4f6',
-    padding: '6px 16px',
-    borderRadius: '20px',
-    marginBottom: '24px',
-    fontWeight: 500,
-    letterSpacing: '0.02em',
-  },
   sectionTitle: {
     fontSize: '28px',
     fontWeight: 700,
     color: '#000000',
-    marginTop: '0', // Adjusting margin top since badge or divider comes before
+    marginTop: '40px',
     marginBottom: '24px',
   },
   sectionDesc: {
