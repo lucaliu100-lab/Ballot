@@ -124,8 +124,8 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
       console.log('🎬 Start Round: requesting /api/start-round...');
 
       const controller = new AbortController();
-      // Generous timeout for cold starts: 45 seconds
-      const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
+      // Timeout for cold starts: 75 seconds
+      const timeoutId = window.setTimeout(() => controller.abort(), 75_000);
 
       const response = await fetch(API_ENDPOINTS.startRound, {
         method: 'POST',
@@ -157,8 +157,8 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
       if (err instanceof Error && err.name === 'AbortError') {
         setError(
           currentRetry === 0
-            ? '⏰ Server is waking up (free hosting cold start). This can take 30-40 seconds. Please click "Start Round" again and wait.'
-            : `⏰ Still waking up... (Attempt ${currentRetry + 1}). Click "Start Round" again and wait 30-40 seconds.`
+            ? 'Server is waking up. Please click "Start" again and wait.'
+            : `Still waking up (attempt ${currentRetry + 1}). Click "Start" again and wait.`
         );
       } else {
         setError(err instanceof Error ? err.message : 'Unknown error');
@@ -214,6 +214,7 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
           >
             {loading ? 'Starting...' : 'Start'}
           </button>
+          <div style={styles.wakeHint}>Time may be 60s waiting for server to wake up</div>
           {error && <div style={styles.error}>{error}</div>}
         </div>
 
@@ -377,6 +378,13 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
     textTransform: 'uppercase',
+  },
+  wakeHint: {
+    marginTop: '10px',
+    fontSize: '12px',
+    color: '#6b7280',
+    lineHeight: 1.4,
+    textAlign: 'center',
   },
   error: {
     marginTop: '16px',

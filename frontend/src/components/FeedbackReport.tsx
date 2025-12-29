@@ -450,6 +450,11 @@ function FeedbackReport({
           {/* CONTENT ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
+            {overallLengthDeduction > 0 && (
+              <div style={styles.subOptimalLengthNote}>
+                Speech is Sub-Optimal Length {overallLengthDeduction.toFixed(1)} deducted
+              </div>
+            )}
             <AnalysisItem 
               title="Topic Adherence" 
               score={analysis.contentAnalysis.topicAdherence.score} 
@@ -821,6 +826,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   overallDeductionNote: {
     marginTop: '8px',
+    fontSize: '0.9rem',
+    color: '#6b7280',
+    lineHeight: 1.4,
+  },
+  subOptimalLengthNote: {
+    marginTop: '-6px',
+    marginBottom: '16px',
     fontSize: '0.9rem',
     color: '#6b7280',
     lineHeight: 1.4,
