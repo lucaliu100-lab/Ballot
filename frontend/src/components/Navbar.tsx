@@ -40,7 +40,7 @@ const Navbar: React.FC<NavbarProps> = ({
           }}
           disabled={disabled}
         >
-          BALLOT
+          WIN BALLOT
         </button>
 
         {user && (
