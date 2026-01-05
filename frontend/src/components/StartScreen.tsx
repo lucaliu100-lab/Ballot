@@ -10,6 +10,17 @@ import { RoundData } from '../types';
 import { API_ENDPOINTS } from '../lib/constants';
 import { supabase } from '../lib/supabase';
 
+function safeNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function isCorruptOverallScore(score: unknown): boolean {
+  const n = safeNumber(score);
+  if (n === null) return false;
+  return n < 0 || n > 10;
+}
+
 function isInsufficientSessionRow(row: any): boolean {
   const wc = typeof row?.word_count === 'number' ? row.word_count : 0;
   if (wc > 0 && wc < 25) return true;
@@ -80,31 +91,32 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
   useEffect(() => {
     const fetchDashboardData = async () => {
       if (!supabase) return;
-      // Fetch sessions
-      // Filter by word_count >= 25 to match what's shown in history (excludes insufficient sessions)
-      const { data: sessions, count } = await supabase
+      // Fetch sessions (same source as History)
+      const { data: sessions } = await supabase
         .from('sessions')
-        .select('*', { count: 'exact' })
-        .gte('word_count', 25)
+        .select('*')
         .order('created_at', { ascending: false })
-        .limit(20);
-
-      if (count !== null) setTotalSessions(count);
+        .limit(500);
 
       if (!sessions || sessions.length === 0) return;
 
-      // Filter valid sessions for stats
+      // Canonicalize to match History:
+      // - exclude insufficient speech
+      // - exclude corrupt overall scores
+      // - remove duplicates (video_filename stable per recording)
       const seen = new Set<string>();
-      const valid = sessions.filter((s) => {
+      const canonical = sessions.filter((s) => {
         if (isInsufficientSessionRow(s)) return false;
+        if (isCorruptOverallScore(s?.overall_score)) return false;
         const key = stableSessionKey(s);
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
 
-      setValidSessions(valid);
-      if (valid.length > 0) setLastSession(valid[0]);
+      setTotalSessions(canonical.length);
+      setValidSessions(canonical);
+      if (canonical.length > 0) setLastSession(canonical[0]);
     };
 
     fetchDashboardData();
