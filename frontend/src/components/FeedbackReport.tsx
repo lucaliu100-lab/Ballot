@@ -450,11 +450,6 @@ function FeedbackReport({
           {/* CONTENT ANALYSIS */}
           <div style={styles.analysisSectionWithBg}>
             <h2 style={styles.sectionHeader}>| Content Analysis (40%)</h2>
-            {overallLengthDeduction > 0 && (
-              <div style={styles.subOptimalLengthNote}>
-                Speech is Sub-Optimal Length {overallLengthDeduction.toFixed(1)} deducted
-              </div>
-            )}
             <AnalysisItem 
               title="Topic Adherence" 
               score={analysis.contentAnalysis.topicAdherence.score} 

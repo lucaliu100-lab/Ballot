@@ -25,6 +25,18 @@ interface HistoryProps {
   onSelectSession?: (session: any) => void;
 }
 
+function safeNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function isCorruptOverallScore(score: unknown): boolean {
+  const n = safeNumber(score);
+  if (n === null) return false; // treat missing/unknown as non-corrupt
+  // Overall scores should always be on a 0–10 scale.
+  return n < 0 || n > 10;
+}
+
 function countWordsSafe(text: unknown): number {
   if (typeof text !== 'string') return 0;
   const t = text.trim();
@@ -120,6 +132,7 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionsData, setSessionsData] = useState<any[]>([]);
+  const [cleanupMessage, setCleanupMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -136,8 +149,43 @@ function History({ onClose, onSelectSession }: HistoryProps) {
         
         if (error) throw error;
 
+        // Remove (and delete) obviously corrupt rows (e.g. legacy bugs storing 65 instead of 6.5).
+        // Only do this for the authenticated user.
+        const corruptIds = (data || [])
+          .filter((s: any) => isCorruptOverallScore(s?.overall_score))
+          .map((s: any) => String(s.id))
+          .filter(Boolean);
+
+        if (corruptIds.length > 0) {
+          try {
+            const { data: auth } = await supabase.auth.getUser();
+            const userId = auth?.user?.id;
+            if (userId) {
+              const { error: deleteError } = await supabase
+                .from('sessions')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', corruptIds);
+
+              if (deleteError) {
+                console.warn('Failed to delete corrupt sessions:', deleteError.message);
+              } else {
+                setCleanupMessage(
+                  corruptIds.length === 1
+                    ? 'Removed 1 corrupt history entry.'
+                    : `Removed ${corruptIds.length} corrupt history entries.`
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to clean up corrupt sessions:', e);
+          }
+        }
+
         // Map snake_case to camelCase for compatibility
-        const mapped = (data || []).map(s => ({
+        const mapped = (data || [])
+          .filter((s: any) => !isCorruptOverallScore(s?.overall_score))
+          .map(s => ({
           id: s.id,
           theme: s.theme,
           quote: s.quote,
@@ -202,7 +250,10 @@ function History({ onClose, onSelectSession }: HistoryProps) {
 
   // Helper: Get Avg Score
   const getSessionAvgScore = (session: any): number => {
-    if (session.overallScore !== undefined) return Number(session.overallScore);
+    if (session.overallScore !== undefined) {
+      const n = safeNumber(session.overallScore);
+      if (n !== null) return Math.max(0, Math.min(10, n));
+    }
     // Fallback logic
     if (session.contentScore !== undefined && session.deliveryScore !== undefined && session.languageScore !== undefined) {
       return Number(((session.contentScore * 0.4) + (session.deliveryScore * 0.3) + (session.languageScore * 0.15) + (session.bodyLanguageScore || 0) * 0.15).toFixed(1));
@@ -474,6 +525,24 @@ function History({ onClose, onSelectSession }: HistoryProps) {
         <h1 style={styles.title}>Performance History</h1>
         <p style={styles.subtitle}>Detailed analysis of your competitive progress</p>
       </div>
+
+      {cleanupMessage && (
+        <div
+          style={{
+            maxWidth: 1280,
+            margin: '0 auto 12px auto',
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid #bbf7d0',
+            background: '#f0fdf4',
+            color: '#166534',
+            fontSize: '0.85rem',
+            fontWeight: 700,
+          }}
+        >
+          {cleanupMessage}
+        </div>
+      )}
 
       {/* TOP SECTION: METRICS GRID */}
       <div className="metrics-grid">
