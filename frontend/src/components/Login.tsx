@@ -9,6 +9,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabase';
+import { getPublicSiteOrigin } from '../lib/url';
 
 type AuthView = 'sign_in' | 'sign_up' | 'forgot_password';
 
@@ -39,9 +40,10 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
       return;
     }
     try {
+      const siteOrigin = getPublicSiteOrigin() || window.location.origin;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: window.location.origin }
+        options: { redirectTo: siteOrigin }
       });
       if (error) throw error;
     } catch (err) {
@@ -124,8 +126,9 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
     setIsLoading(true);
     setError(null);
     try {
+      const siteOrigin = getPublicSiteOrigin() || window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/update-password`,
+        redirectTo: `${siteOrigin}/update-password`,
       });
       if (error) throw error;
       setMessage('Password reset link sent! Check your email.');
