@@ -18,7 +18,8 @@ import { UploadResponse } from '../types';
 import { API_ENDPOINTS } from '../lib/constants';
 
 // Constants
-const RECORDING_DURATION = 300; // 5 minutes in seconds
+const DEFAULT_RECORDING_DURATION = 300; // 5 minutes in seconds (fallback)
+const GRACE_PERIOD = 15; // 15 seconds grace period after time expires
 // Reduce upload size by lowering resolution + bitrate (good enough for body-language cues)
 const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { ideal: 640, max: 640 },
@@ -36,13 +37,15 @@ const RECORDER_BITS = {
 // Props that this component receives from its parent
 interface RecordScreenProps {
   selectedQuote: string;                        // The quote to display during recording
-  remainingPrepTime?: number;                   // Remaining prep time in seconds (added to 5 min)
+  remainingPrepTime?: number;                   // Remaining prep time in seconds (added to base duration)
+  baseDuration?: number;                        // Base recording duration (format-specific)
   onUploadComplete: (response: UploadResponse) => void;  // Called after successful upload
 }
 
 function RecordScreen({ 
   selectedQuote, 
   remainingPrepTime = 0,
+  baseDuration = DEFAULT_RECORDING_DURATION,
   onUploadComplete 
 }: RecordScreenProps) {
   // ==========================================
@@ -61,10 +64,10 @@ function RecordScreen({
   // URL to preview the recorded video
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  // Total available time (5 min + remaining prep time)
-  const totalTime = RECORDING_DURATION + remainingPrepTime;
+  // Total available time (base duration + remaining prep time)
+  const totalTime = baseDuration + remainingPrepTime;
 
-  // Countdown timer (time remaining to record)
+  // Countdown timer (time remaining to record) - can go negative up to -GRACE_PERIOD
   const [timeRemaining, setTimeRemaining] = useState<number>(totalTime);
 
   // Recording duration (how long we've been recording)
@@ -101,24 +104,27 @@ function RecordScreen({
   // Reference to the recording duration timer
   const durationRef = useRef<number | null>(null);
 
-  // Format seconds into MM:SS display
+  // Format seconds into MM:SS display (handles negative numbers for grace period)
   const formatTime = useCallback((seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const isNegative = seconds < 0;
+    const absSeconds = Math.abs(seconds);
+    const mins = Math.floor(absSeconds / 60);
+    const secs = absSeconds % 60;
+    const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return isNegative ? `-${timeStr}` : timeStr;
   }, []);
 
-  // Start the countdown timer
+  // Start the countdown timer (allows going negative for grace period)
   const startCountdown = useCallback(() => {
     setTimeRemaining(totalTime);
     countdownRef.current = window.setInterval(() => {
       setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          // Time's up - stop recording
+        // Grace period: allow timer to go to -GRACE_PERIOD before stopping
+        if (prev <= -GRACE_PERIOD) {
           if (countdownRef.current) {
             clearInterval(countdownRef.current);
           }
-          return 0;
+          return -GRACE_PERIOD;
         }
         return prev - 1;
       });
@@ -160,9 +166,9 @@ function RecordScreen({
     };
   }, [stopTimers]);
 
-  // Auto-stop recording when countdown reaches 0
+  // Auto-stop recording when countdown reaches -GRACE_PERIOD (end of grace period)
   useEffect(() => {
-    if (timeRemaining <= 0 && recordingState === 'recording') {
+    if (timeRemaining <= -GRACE_PERIOD && recordingState === 'recording') {
       stopRecording();
     }
   }, [timeRemaining, recordingState]);
@@ -326,22 +332,6 @@ function RecordScreen({
   };
 
   /**
-   * Discard the recording and start over
-   */
-  const discardRecording = () => {
-    // Clean up the preview URL
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    
-    setRecordedBlob(null);
-    setPreviewUrl(null);
-    setRecordingState('idle');
-    setTimeRemaining(totalTime);
-    setRecordingDuration(0);
-  };
-
-  /**
    * Upload the recorded video to the backend
    */
   const uploadRecording = async () => {
@@ -453,25 +443,37 @@ function RecordScreen({
               src={previewUrl}
               controls
               playsInline
-              preload="metadata"
-              style={styles.video}
+              preload="auto"
+              style={styles.previewVideo}
             />
           )}
 
           {/* Timer overlay - top right */}
           <div style={styles.timerOverlay}>
-            <div style={styles.timerBox}>
+            <div style={{
+              ...styles.timerBox,
+              background: timeRemaining < 0 ? 'rgba(220, 38, 38, 0.9)' : 'rgba(0, 0, 0, 0.7)',
+            }}>
               <span style={styles.timerLabel}>
-                {recordingState === 'recording' ? 'TIME LEFT' : 'AVAILABLE'}
+                {timeRemaining < 0 
+                  ? 'GRACE PERIOD' 
+                  : recordingState === 'recording' 
+                    ? 'TIME LEFT' 
+                    : 'AVAILABLE'}
               </span>
               <span style={{
                 ...styles.timerValue,
-                color: timeRemaining < 60 && recordingState === 'recording' 
-                  ? '#ef4444' 
-                  : '#ffffff',
+                color: timeRemaining < 0 
+                  ? '#ffffff'
+                  : timeRemaining < 60 && recordingState === 'recording' 
+                    ? '#ef4444' 
+                    : '#ffffff',
               }}>
                 {formatTime(timeRemaining)}
               </span>
+              {timeRemaining < 0 && (
+                <span style={styles.graceHint}>Recording will stop automatically</span>
+              )}
             </div>
           </div>
 
@@ -522,12 +524,6 @@ function RecordScreen({
               style={styles.uploadButton}
             >
               Upload Recording
-            </button>
-            <button
-              onClick={discardRecording}
-              style={styles.discardButton}
-            >
-              Discard & Retry
             </button>
           </div>
         )}
@@ -587,6 +583,14 @@ const styles: Record<string, React.CSSProperties> = {
     objectFit: 'cover',
     display: 'block',
   },
+  // Preview video after recording - use 'contain' so controls work properly
+  previewVideo: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    display: 'block',
+    background: '#000',
+  },
   timerOverlay: {
     position: 'absolute',
     top: '20px',
@@ -613,6 +617,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1.8rem',
     fontWeight: 700,
     fontFamily: 'monospace',
+  },
+  graceHint: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: '0.65rem',
+    fontWeight: 500,
+    marginTop: '4px',
+    textAlign: 'center',
   },
   recordingIndicator: {
     position: 'absolute',
@@ -706,17 +717,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '16px 40px',
     fontSize: '1.1rem',
     fontWeight: 600,
-    borderRadius: '50px',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  },
-  discardButton: {
-    background: 'transparent',
-    color: '#ffffff',
-    border: '2px solid rgba(255, 255, 255, 0.3)',
-    padding: '16px 40px',
-    fontSize: '1.1rem',
-    fontWeight: 500,
     borderRadius: '50px',
     cursor: 'pointer',
     transition: 'all 0.2s ease',

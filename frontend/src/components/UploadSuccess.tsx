@@ -32,20 +32,23 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
   const abortRef = useRef<AbortController | null>(null);
 
   // Simulate progress while waiting for the API
+  // Fast progress up to 90%, then slow crawl to give API time to respond
   useEffect(() => {
     if (!isProcessing) return;
 
     const interval = setInterval(() => {
       setProgress(prev => {
-        // Championship-caliber progress logic:
-        // Starts slower to signal thoroughness, slows down at the end for "deep evaluation".
-        if (prev < 40) return prev + 2;      // Careful start
-        if (prev < 80) return prev + 1.5;    // Systematic analysis
-        if (prev < 92) return prev + 0.5;    // Finalizing scoring matrices
-        if (prev < 98) return prev + 0.1;    // Deep NSDA standard verification
-        return prev;
+        // Fast initial progress up to 90%, then very slow crawl
+        // This works for both short (1-2 min) and longer (4+ min) videos
+        if (prev < 30) return prev + 1.5;      // Fast initial upload/transcoding
+        if (prev < 60) return prev + 1.2;      // Processing audio
+        if (prev < 80) return prev + 0.8;      // AI analysis starting
+        if (prev < 90) return prev + 0.4;      // Scoring in progress
+        if (prev < 95) return prev + 0.08;     // Deep evaluation (slow down significantly)
+        if (prev < 98) return prev + 0.03;     // Final verification (crawl)
+        return prev;                            // Hold at 98% until API responds
       });
-    }, 400);
+    }, 500); // 500ms interval for smoother animation
 
     return () => clearInterval(interval);
   }, [isProcessing]);

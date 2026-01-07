@@ -123,3 +123,26 @@ export type FlowStep =
   | 'insufficient'   // Transcript/audio too short to score competitively
   | 'report'         // Final feedback report (live)
   | 'ballot';        // Viewing a past ballot (fetched by ID)
+
+// Speech format types (High School vs Middle School)
+export type SpeechFormat = 'high-school' | 'middle-school';
+
+// Format configuration
+export interface FormatConfig {
+  name: string;
+  prepDuration: number;      // Prep time in seconds
+  recordDuration: number;    // Base recording time in seconds
+}
+
+export const SPEECH_FORMATS: Record<SpeechFormat, FormatConfig> = {
+  'high-school': {
+    name: 'High School Impromptu',
+    prepDuration: 120,    // 2 minutes
+    recordDuration: 300,  // 5 minutes
+  },
+  'middle-school': {
+    name: 'Middle School Impromptu',
+    prepDuration: 180,    // 3 minutes
+    recordDuration: 240,  // 4 minutes
+  },
+};

@@ -20,11 +20,11 @@ import { useEffect, useState } from 'react';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 
 // Import shared utilities and constants
-import { PREP_TIMER_DURATION, API_ENDPOINTS } from './lib/constants';
+import { API_ENDPOINTS } from './lib/constants';
 import { extractFilename } from './lib/utils';
 
 // Import types
-import { FlowStep, RoundData, UploadResponse, DebateAnalysis } from './types';
+import { FlowStep, RoundData, UploadResponse, DebateAnalysis, SpeechFormat, SPEECH_FORMATS } from './types';
 
 // Import all screen components
 import Login from './components/Login';
@@ -118,6 +118,9 @@ function App() {
   // ID of the session currently being viewed in 'ballot' mode
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
 
+  // Speech format (High School vs Middle School)
+  const [speechFormat, setSpeechFormat] = useState<SpeechFormat>('high-school');
+
   // ==========================================
   // FLOW HANDLERS
   // ==========================================
@@ -127,23 +130,85 @@ function App() {
     console.log(`🧭 Flow step: ${currentStep}`);
   }, [currentStep]);
 
+  // URL path mapping for each step
+  const stepToPath: Record<FlowStep, string> = {
+    'start': '/dashboard',
+    'theme-preview': '/theme',
+    'quote-select': '/quotes',
+    'prep': '/prep',
+    'record': '/record',
+    'processing': '/processing',
+    'insufficient': '/insufficient',
+    'report': '/report',
+    'ballot': '/ballot',
+  };
+
+  // Push URL when step changes (but not on initial load or popstate)
+  const pushStepUrl = (step: FlowStep, sessionId?: string) => {
+    if (step === 'ballot' && sessionId) {
+      window.history.pushState(null, '', `/ballot/${sessionId}`);
+    } else {
+      window.history.pushState(null, '', stepToPath[step]);
+    }
+  };
+
   // Handle URL routing for direct links and back button
   useEffect(() => {
     const handleLocationChange = () => {
       const path = window.location.pathname;
+      
+      // Reset common states
+      setShowLogin(false);
+      
       if (path.startsWith('/ballot/')) {
         const id = path.split('/ballot/')[1];
         if (id) {
           setViewingSessionId(id);
           setCurrentStep('ballot');
           setShowHistory(false);
+          setShowLanding(false);
         }
-      } else if (path === '/') {
-        // Only reset if we are currently viewing a ballot or history
-        if (currentStep === 'ballot') {
-          setCurrentStep('start');
-          setViewingSessionId(null);
-        }
+      } else if (path === '/history') {
+        setShowHistory(true);
+        setShowLanding(false);
+        setViewingSessionId(null);
+      } else if (path === '/login' || path === '/signin') {
+        setInitialAuthView('sign_in');
+        setShowLogin(true);
+      } else if (path === '/signup' || path === '/register') {
+        setInitialAuthView('sign_up');
+        setShowLogin(true);
+      } else if (path === '/theme') {
+        setShowHistory(false);
+        setShowLanding(false);
+        // Only set step if we have round data
+        if (roundData) setCurrentStep('theme-preview');
+      } else if (path === '/quotes') {
+        setShowHistory(false);
+        setShowLanding(false);
+        if (roundData) setCurrentStep('quote-select');
+      } else if (path === '/prep') {
+        setShowHistory(false);
+        setShowLanding(false);
+        if (selectedQuote) setCurrentStep('prep');
+      } else if (path === '/record') {
+        setShowHistory(false);
+        setShowLanding(false);
+        if (selectedQuote) setCurrentStep('record');
+      } else if (path === '/processing') {
+        setShowHistory(false);
+        setShowLanding(false);
+        if (uploadResponse) setCurrentStep('processing');
+      } else if (path === '/report') {
+        setShowHistory(false);
+        setShowLanding(false);
+        if (analysis) setCurrentStep('report');
+      } else if (path === '/dashboard' || path === '/') {
+        // Reset to home/dashboard
+        setShowHistory(false);
+        setShowLanding(false);
+        setCurrentStep('start');
+        setViewingSessionId(null);
       }
     };
 
@@ -153,7 +218,7 @@ function App() {
     // Listen for back/forward
     window.addEventListener('popstate', handleLocationChange);
     return () => window.removeEventListener('popstate', handleLocationChange);
-  }, [currentStep]);
+  }, [roundData, selectedQuote, uploadResponse, analysis]);
 
   /**
    * Called when user selects a session from history
@@ -168,12 +233,32 @@ function App() {
   };
 
   /**
+   * Navigate to history page with URL update
+   */
+  const handleNavigateToHistory = () => {
+    setShowHistory(true);
+    setShowLanding(false);
+    window.history.pushState(null, '', '/history');
+  };
+
+  /**
+   * Navigate back to history from ballot view
+   */
+  const handleBackToHistory = () => {
+    setViewingSessionId(null);
+    setCurrentStep('start');
+    setShowHistory(true);
+    window.history.pushState(null, '', '/history');
+  };
+
+  /**
    * Called when the round data is loaded from the API
    * Move to theme preview step (not directly to quote selection)
    */
   const handleRoundStart = (data: RoundData) => {
     setRoundData(data);
     setCurrentStep('theme-preview');
+    pushStepUrl('theme-preview');
   };
 
   /**
@@ -204,6 +289,7 @@ function App() {
    */
   const handleEndPrep = () => {
     setCurrentStep('quote-select');
+    pushStepUrl('quote-select');
   };
 
   /**
@@ -213,6 +299,7 @@ function App() {
   const handleQuoteSelect = (quote: string) => {
     setSelectedQuote(quote);
     setCurrentStep('prep');
+    pushStepUrl('prep');
   };
 
   /**
@@ -222,6 +309,7 @@ function App() {
   const handleTimerComplete = (remainingTime: number = 0) => {
     setRemainingPrepTime(remainingTime);
     setCurrentStep('record');
+    pushStepUrl('record');
   };
 
   /**
@@ -232,6 +320,7 @@ function App() {
     console.log('📦 Upload complete (frontend):', response);
     setUploadResponse(response);
     setCurrentStep('processing');
+    pushStepUrl('processing');
   };
 
   /**
@@ -278,6 +367,7 @@ function App() {
       setIsFeedbackMock(false);
       setTranscript(transcriptData);
       setCurrentStep('insufficient');
+      pushStepUrl('insufficient');
       return;
     }
 
@@ -285,6 +375,7 @@ function App() {
     setIsFeedbackMock(isMock);
     setTranscript(transcriptData);
     setCurrentStep('report');
+    pushStepUrl('report');
   };
 
   /**
@@ -298,6 +389,7 @@ function App() {
     setIsFeedbackMock(false);
     // Go back to prep timer
     setCurrentStep('prep');
+    pushStepUrl('prep');
   };
 
   /**
@@ -341,15 +433,18 @@ function App() {
         const data: RoundData = await response.json();
         setRoundData(data);
         setCurrentStep('theme-preview');
+        pushStepUrl('theme-preview');
       } else {
         // Fallback to start screen if fetch fails
         setCurrentStep('start');
         setRoundData(null);
+        pushStepUrl('start');
       }
     } catch (err) {
       console.error('Failed to start new round:', err);
       setCurrentStep('start');
       setRoundData(null);
+      pushStepUrl('start');
     }
   };
 
@@ -368,7 +463,7 @@ function App() {
         return (
           <StartScreen 
             onRoundStart={handleRoundStart} 
-            onShowHistory={() => setShowHistory(true)}
+            onShowHistory={handleNavigateToHistory}
           />
         );
 
@@ -399,17 +494,20 @@ function App() {
         return (
           <PrepTimer
             selectedQuote={selectedQuote}
-            durationSeconds={PREP_TIMER_DURATION}
+            speechFormat={speechFormat}
             onTimerComplete={handleTimerComplete}
+            onFormatChange={(format: SpeechFormat) => setSpeechFormat(format)}
           />
         );
 
       case 'record':
         // Show the recording screen with remaining prep time for extended countdown
+        // Recording duration is format-specific + any remaining prep time
         return (
           <RecordScreen
             selectedQuote={selectedQuote}
             remainingPrepTime={remainingPrepTime}
+            baseDuration={SPEECH_FORMATS[speechFormat].recordDuration}
             onUploadComplete={handleUploadComplete}
           />
         );
@@ -460,7 +558,7 @@ function App() {
         return (
           <BallotView
             sessionId={viewingSessionId}
-            onGoHome={handleGoHome}
+            onGoHome={handleBackToHistory}
             onRedoRound={() => {
               // Redo from history logic: 
               // We'd need to load the quote and start prep.
@@ -555,7 +653,7 @@ function App() {
           user={user}
           onNavigateToLanding={() => {}} // Stay on landing
           onNavigateToDashboard={handleGoHome}
-          onNavigateToHistory={() => { setShowLanding(false); setShowHistory(true); }}
+          onNavigateToHistory={handleNavigateToHistory}
           onSignOut={() => supabase?.auth.signOut()}
         />
         
@@ -567,7 +665,7 @@ function App() {
           userEmail={user.email}
           onSignOut={() => supabase?.auth.signOut()}
           onDashboardClick={handleGoHome}
-          onHistoryClick={() => { setShowLanding(false); setShowHistory(true); }}
+          onHistoryClick={handleNavigateToHistory}
         />
       </div>
     );
@@ -588,7 +686,7 @@ function App() {
           user={user}
           onNavigateToLanding={() => setShowLanding(true)}
           onNavigateToDashboard={handleGoHome}
-          onNavigateToHistory={() => setShowHistory(true)}
+          onNavigateToHistory={handleNavigateToHistory}
           onSignOut={() => supabase?.auth.signOut()}
           disabled={isNavDisabled}
         />
@@ -596,7 +694,13 @@ function App() {
 
       {/* Render the current step or history */}
       {showHistory ? (
-        <History onClose={() => setShowHistory(false)} onSelectSession={handleHistorySessionSelect} />
+        <History 
+          onClose={() => {
+            setShowHistory(false);
+            window.history.pushState(null, '', '/');
+          }} 
+          onSelectSession={handleHistorySessionSelect} 
+        />
       ) : (
         renderCurrentStep()
       )}

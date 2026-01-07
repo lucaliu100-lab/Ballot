@@ -1,7 +1,7 @@
 /**
  * Gemini Client Module (via OpenRouter)
  * 
- * Handles multimodal analysis (Video + Audio) using Gemini 2.0 Flash.
+ * Handles multimodal analysis (Video + Audio) using Gemini 2.5 Flash.
  * Uses the OpenRouter API for unified model access.
  */
 
@@ -21,8 +21,8 @@ function getApiKey(): string {
 }
 
 function getModel(): string {
-  // Production-stable ID for Gemini 2.0 Flash on OpenRouter
-  return process.env.GEMINI_MODEL || 'google/gemini-2.0-flash-001';
+  // Production-stable ID for Gemini 2.5 Flash on OpenRouter (more nuanced feedback)
+  return process.env.GEMINI_MODEL || 'google/gemini-2.5-flash-preview-05-20';
 }
 
 // ===========================================
@@ -1492,7 +1492,14 @@ Rules:
 
     const judgePrompt = `
 You are a professional NSDA impromptu judge for BALLOT, an elite debate training platform.
-Analyze this competitive impromptu speech with surgical precision.
+Analyze this competitive impromptu speech with surgical precision and nuanced detail.
+
+YOUR FEEDBACK PHILOSOPHY:
+- Be specific and actionable, not generic. Reference exact moments and phrases from the speech.
+- Explain WHY something works or doesn't work, not just WHAT the speaker did.
+- Differentiate subtle performance differences: a 7.3 should feel meaningfully different from a 7.6.
+- Provide rich, detailed feedback that helps the speaker understand exactly how to improve.
+- Be encouraging but honest. Point out both strengths AND specific weaknesses.
 
 NSDA-CALIBRATED RUBRIC (MUST FOLLOW):
 - Scoring is 0.0–10.0 (one decimal). This corresponds to NSDA 30-point speaker points mapping:
@@ -1533,21 +1540,25 @@ CRITICAL ANTI-HALLUCINATION RULES (MUST FOLLOW):
 - For time ranges, ONLY use the bracketed time ranges provided in TRANSCRIPT WITH ESTIMATED TIME-CODES.
 - If transcript is too short, say so explicitly and return minimal evaluation.
 
-FEEDBACK FORMAT RULE (MUST FOLLOW FOR EVERY feedback STRING IN THE JSON):
-Each feedback string MUST follow this exact markdown template (always include all sections; do not rename headings):
-**Score Justification:** 2–4 sentences summarizing what the speaker did and their level (novice/developing/varsity/national).
+FEEDBACK FORMAT RULE (CRITICAL - MUST FOLLOW FOR EVERY feedback STRING):
+Every "feedback" field in the JSON MUST include ALL FOUR sections below with these EXACT headers. Do NOT skip any section. Do NOT rename headers.
+
+**Score Justification:** 3–5 sentences analyzing what worked and what did not. Explain WHY this exact score (with decimal) was earned. Reference specific competitive standards.
 
 **Evidence from Speech:**
-- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
-- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
-- <short quote from transcript (NO double-quotes)> [m:ss-m:ss]
+- 'exact quote from transcript' [m:ss-m:ss] — what this demonstrates
+- 'another quote' [m:ss-m:ss] — why this matters
+- 'third quote' [m:ss-m:ss] — technique or missed opportunity
 
-**What This Means:** 1–2 sentences explaining the competitive implication for an NSDA ballot.
+**What This Means:** 2–3 sentences on competitive implications. How would a tournament judge perceive this? What skill level does it indicate?
 
 **How to Improve:**
-1. One concrete drill or adjustment.
-2. One concrete drill or adjustment.
-3. One concrete drill or adjustment.
+1. Specific drill with clear instructions
+2. Concrete technique to implement immediately
+3. Practice exercise with measurable goal
+
+EXAMPLE OF A COMPLETE feedback STRING (follow this exact structure):
+"**Score Justification:** The speaker demonstrates solid topic adherence with a clear thesis connecting to the quote. However, the linkage becomes weaker in the second body point where tangential examples dilute focus. Score of 7.4 reflects competent connection with room for tighter integration.\\n\\n**Evidence from Speech:**\\n- 'This quote teaches us that true freedom requires responsibility' [0:15-0:22] — Strong thesis with clear interpretation\\n- 'For example, my uncle once said' [1:45-2:10] — Personal anecdote that drifts from thesis\\n- 'In conclusion freedom matters' [4:02-4:15] — Rushed conclusion without quote callback\\n\\n**What This Means:** A judge would note the solid opening but mark down for mid-speech drift. This indicates developing-level quote integration typical of local competitors moving toward regional success.\\n\\n**How to Improve:**\\n1. Write your thesis on paper during prep and check each point against it\\n2. End each body paragraph with one sentence linking back to the quote\\n3. Practice 3 speeches with forced 10-second conclusions that reference the prompt"
 
 JSON VALIDITY RULE (CRITICAL):
 - The entire response must be valid JSON.
@@ -1555,45 +1566,46 @@ JSON VALIDITY RULE (CRITICAL):
 - NEVER use the " character inside any feedback text. If you must quote the speaker, use single quotes instead.
 
 SCORING RULES:
-- ALL scores are on a 0.0–10.0 scale (one decimal max). Never use 0–100.
+- ALL scores MUST use one decimal place (e.g., 7.3, 8.1, 6.5). Never use whole numbers like 7 or 8. Never use 0–100.
+- Be precise and nuanced: use the full range of decimals (7.1, 7.2, 7.3... 7.9) to differentiate performance levels.
 - categoryScores.*.weighted must equal score * weight.
 - overallScore must equal the sum of the four weighted category scores.
 
 Return ONLY valid JSON matching this structure (NO transcript field; transcript is provided above):
 {
-  "overallScore": 0,
+  "overallScore": 7.4,
   "performanceTier": "string",
   "tournamentReady": false,
   "categoryScores": {
-    "content": {"score": 0, "weight": 0.40, "weighted": 0},
-    "delivery": {"score": 0, "weight": 0.30, "weighted": 0},
-    "language": {"score": 0, "weight": 0.15, "weighted": 0},
-    "bodyLanguage": {"score": 0, "weight": 0.15, "weighted": 0}
+    "content": {"score": 7.2, "weight": 0.40, "weighted": 2.88},
+    "delivery": {"score": 7.5, "weight": 0.30, "weighted": 2.25},
+    "language": {"score": 7.8, "weight": 0.15, "weighted": 1.17},
+    "bodyLanguage": {"score": 7.3, "weight": 0.15, "weighted": 1.10}
   },
   "contentAnalysis": {
-    "topicAdherence": {"score": 0, "feedback": "string"},
-    "argumentStructure": {"score": 0, "feedback": "string"},
-    "depthOfAnalysis": {"score": 0, "feedback": "string"},
-    "examplesEvidence": {"score": 0, "feedback": "string"},
-    "timeManagement": {"score": 0, "feedback": "string"}
+    "topicAdherence": {"score": 7.4, "feedback": "string"},
+    "argumentStructure": {"score": 7.1, "feedback": "string"},
+    "depthOfAnalysis": {"score": 6.8, "feedback": "string"},
+    "examplesEvidence": {"score": 7.3, "feedback": "string"},
+    "timeManagement": {"score": 7.5, "feedback": "string"}
   },
   "deliveryAnalysis": {
-    "vocalVariety": {"score": 0, "feedback": "string"},
-    "pacing": {"score": 0, "wpm": 0, "feedback": "string"},
-    "articulation": {"score": 0, "feedback": "string"},
-    "fillerWords": {"score": 0, "total": 0, "perMinute": 0, "breakdown": {}, "feedback": "string"}
+    "vocalVariety": {"score": 7.6, "feedback": "string"},
+    "pacing": {"score": 7.2, "wpm": 145, "feedback": "string"},
+    "articulation": {"score": 7.8, "feedback": "string"},
+    "fillerWords": {"score": 8.1, "total": 8, "perMinute": 1.8, "breakdown": {}, "feedback": "string"}
   },
   "languageAnalysis": {
-    "vocabulary": {"score": 0, "feedback": "string"},
-    "rhetoricalDevices": {"score": 0, "examples": [], "feedback": "string"},
-    "emotionalAppeal": {"score": 0, "feedback": "string"},
-    "logicalAppeal": {"score": 0, "feedback": "string"}
+    "vocabulary": {"score": 7.5, "feedback": "string"},
+    "rhetoricalDevices": {"score": 6.9, "examples": [], "feedback": "string"},
+    "emotionalAppeal": {"score": 7.7, "feedback": "string"},
+    "logicalAppeal": {"score": 7.4, "feedback": "string"}
   },
   "bodyLanguageAnalysis": {
-    "eyeContact": {"score": 0, "percentage": 0, "feedback": "string"},
-    "gestures": {"score": 0, "feedback": "string"},
-    "posture": {"score": 0, "feedback": "string"},
-    "stagePresence": {"score": 0, "feedback": "string"}
+    "eyeContact": {"score": 7.2, "percentage": 72, "feedback": "string"},
+    "gestures": {"score": 7.1, "feedback": "string"},
+    "posture": {"score": 7.6, "feedback": "string"},
+    "stagePresence": {"score": 7.3, "feedback": "string"}
   },
   "speechStats": {
     "duration": "string",

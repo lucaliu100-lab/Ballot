@@ -226,7 +226,6 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
           >
             {loading ? 'Starting...' : 'Start'}
           </button>
-          <div style={styles.wakeHint}>Time may be 60s waiting for server to wake up</div>
           {error && <div style={styles.error}>{error}</div>}
         </div>
 
@@ -390,13 +389,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
     textTransform: 'uppercase',
-  },
-  wakeHint: {
-    marginTop: '10px',
-    fontSize: '12px',
-    color: '#6b7280',
-    lineHeight: 1.4,
-    textAlign: 'center',
   },
   error: {
     marginTop: '16px',

@@ -167,8 +167,10 @@ app.get('/api/status', async (req, res) => {
 /**
  * Themes and quotes database
  * Each theme has 3 arguable quotes by famous people with multiple interpretations
+ * Expanded database with 40+ themes for diverse impromptu practice
  */
 const THEMES_DATABASE = [
+  // === CLASSIC PHILOSOPHY THEMES ===
   {
     theme: 'Freedom',
     quotes: [
@@ -202,6 +204,16 @@ const THEMES_DATABASE = [
     ],
   },
   {
+    theme: 'Morality',
+    quotes: [
+      '"The only thing necessary for the triumph of evil is for good men to do nothing." — Edmund Burke',
+      '"Morality is not the doctrine of how we may make ourselves happy, but of how we may make ourselves worthy of happiness." — Immanuel Kant',
+      '"Right is right, even if everyone is against it, and wrong is wrong, even if everyone is for it." — William Penn',
+    ],
+  },
+
+  // === PERSONAL GROWTH THEMES ===
+  {
     theme: 'Success',
     quotes: [
       '"It is not enough to succeed. Others must fail." — Gore Vidal',
@@ -210,19 +222,11 @@ const THEMES_DATABASE = [
     ],
   },
   {
-    theme: 'Knowledge',
+    theme: 'Failure',
     quotes: [
-      '"The more I learn, the more I realize how much I don\'t know." — Albert Einstein',
-      '"Knowledge is power, but enthusiasm pulls the switch." — Ivern Ball',
-      '"Real knowledge is to know the extent of one\'s ignorance." — Confucius',
-    ],
-  },
-  {
-    theme: 'Change',
-    quotes: [
-      '"The only constant in life is change." — Heraclitus',
-      '"Be the change you wish to see in the world." — Mahatma Gandhi',
-      '"Progress is impossible without change, and those who cannot change their minds cannot change anything." — George Bernard Shaw',
+      '"I have not failed. I\'ve just found 10,000 ways that won\'t work." — Thomas Edison',
+      '"Failure is simply the opportunity to begin again, this time more intelligently." — Henry Ford',
+      '"Ever tried. Ever failed. No matter. Try again. Fail again. Fail better." — Samuel Beckett',
     ],
   },
   {
@@ -234,6 +238,66 @@ const THEMES_DATABASE = [
     ],
   },
   {
+    theme: 'Change',
+    quotes: [
+      '"The only constant in life is change." — Heraclitus',
+      '"Be the change you wish to see in the world." — Mahatma Gandhi',
+      '"Progress is impossible without change, and those who cannot change their minds cannot change anything." — George Bernard Shaw',
+    ],
+  },
+  {
+    theme: 'Ambition',
+    quotes: [
+      '"Ambition is the path to success. Persistence is the vehicle you arrive in." — Bill Bradley',
+      '"A man\'s worth is no greater than his ambitions." — Marcus Aurelius',
+      '"Ambition is a dream with a V8 engine." — Elvis Presley',
+    ],
+  },
+  {
+    theme: 'Perseverance',
+    quotes: [
+      '"It does not matter how slowly you go as long as you do not stop." — Confucius',
+      '"Perseverance is not a long race; it is many short races one after the other." — Walter Elliot',
+      '"The difference between a successful person and others is not a lack of strength, not a lack of knowledge, but rather a lack of will." — Vince Lombardi',
+    ],
+  },
+
+  // === KNOWLEDGE & WISDOM THEMES ===
+  {
+    theme: 'Knowledge',
+    quotes: [
+      '"The more I learn, the more I realize how much I don\'t know." — Albert Einstein',
+      '"Knowledge is power, but enthusiasm pulls the switch." — Ivern Ball',
+      '"Real knowledge is to know the extent of one\'s ignorance." — Confucius',
+    ],
+  },
+  {
+    theme: 'Wisdom',
+    quotes: [
+      '"The only true wisdom is in knowing you know nothing." — Socrates',
+      '"Knowledge speaks, but wisdom listens." — Jimi Hendrix',
+      '"Turn your wounds into wisdom." — Oprah Winfrey',
+    ],
+  },
+  {
+    theme: 'Education',
+    quotes: [
+      '"Education is the most powerful weapon which you can use to change the world." — Nelson Mandela',
+      '"The purpose of education is to replace an empty mind with an open one." — Malcolm Forbes',
+      '"Education is not the filling of a pail, but the lighting of a fire." — W.B. Yeats',
+    ],
+  },
+  {
+    theme: 'Experience',
+    quotes: [
+      '"Experience is not what happens to you; it\'s what you do with what happens to you." — Aldous Huxley',
+      '"Good judgment comes from experience, and experience comes from bad judgment." — Rita Mae Brown',
+      '"The only source of knowledge is experience." — Albert Einstein',
+    ],
+  },
+
+  // === HUMAN NATURE THEMES ===
+  {
     theme: 'Happiness',
     quotes: [
       '"Happiness is not something ready-made. It comes from your own actions." — Dalai Lama',
@@ -242,11 +306,263 @@ const THEMES_DATABASE = [
     ],
   },
   {
-    theme: 'Morality',
+    theme: 'Fear',
     quotes: [
-      '"The only thing necessary for the triumph of evil is for good men to do nothing." — Edmund Burke',
-      '"Morality is not the doctrine of how we may make ourselves happy, but of how we may make ourselves worthy of happiness." — Immanuel Kant',
-      '"Right is right, even if everyone is against it, and wrong is wrong, even if everyone is for it." — William Penn',
+      '"The only thing we have to fear is fear itself." — Franklin D. Roosevelt',
+      '"Fear is the mind-killer." — Frank Herbert',
+      '"He who fears he will suffer, already suffers because he fears." — Michel de Montaigne',
+    ],
+  },
+  {
+    theme: 'Hope',
+    quotes: [
+      '"Hope is being able to see that there is light despite all of the darkness." — Desmond Tutu',
+      '"We must accept finite disappointment, but never lose infinite hope." — Martin Luther King Jr.',
+      '"Hope is a waking dream." — Aristotle',
+    ],
+  },
+  {
+    theme: 'Love',
+    quotes: [
+      '"The greatest thing you\'ll ever learn is just to love and be loved in return." — Nat King Cole',
+      '"Love all, trust a few, do wrong to none." — William Shakespeare',
+      '"Where there is love there is life." — Mahatma Gandhi',
+    ],
+  },
+  {
+    theme: 'Identity',
+    quotes: [
+      '"To be yourself in a world that is constantly trying to make you something else is the greatest accomplishment." — Ralph Waldo Emerson',
+      '"Know thyself." — Socrates',
+      '"We are what we repeatedly do. Excellence, then, is not an act, but a habit." — Aristotle',
+    ],
+  },
+
+  // === LEADERSHIP & SOCIETY THEMES ===
+  {
+    theme: 'Leadership',
+    quotes: [
+      '"A leader is one who knows the way, goes the way, and shows the way." — John C. Maxwell',
+      '"The greatest leader is not necessarily one who does the greatest things, but one who gets people to do the greatest things." — Ronald Reagan',
+      '"Before you are a leader, success is all about growing yourself. When you become a leader, success is all about growing others." — Jack Welch',
+    ],
+  },
+  {
+    theme: 'Responsibility',
+    quotes: [
+      '"The price of greatness is responsibility." — Winston Churchill',
+      '"With great power comes great responsibility." — Voltaire',
+      '"You cannot escape the responsibility of tomorrow by evading it today." — Abraham Lincoln',
+    ],
+  },
+  {
+    theme: 'Sacrifice',
+    quotes: [
+      '"The ultimate measure of a man is not where he stands in moments of comfort and convenience, but where he stands at times of challenge and controversy." — Martin Luther King Jr.',
+      '"Without sacrifice, there is no meaning." — Unknown',
+      '"Great achievement is usually born of great sacrifice, and is never the result of selfishness." — Napoleon Hill',
+    ],
+  },
+  {
+    theme: 'Integrity',
+    quotes: [
+      '"Integrity is doing the right thing, even when no one is watching." — C.S. Lewis',
+      '"Real integrity is doing the right thing, knowing that nobody\'s going to know whether you did it or not." — Oprah Winfrey',
+      '"The supreme quality for leadership is unquestionably integrity." — Dwight D. Eisenhower',
+    ],
+  },
+
+  // === TIME & LEGACY THEMES ===
+  {
+    theme: 'Time',
+    quotes: [
+      '"Time you enjoy wasting is not wasted time." — Marthe Troly-Curtin',
+      '"Lost time is never found again." — Benjamin Franklin',
+      '"The two most powerful warriors are patience and time." — Leo Tolstoy',
+    ],
+  },
+  {
+    theme: 'Legacy',
+    quotes: [
+      '"Carve your name on hearts, not tombstones. A legacy is etched into the minds of others and the stories they share about you." — Shannon Alder',
+      '"What we do for ourselves dies with us. What we do for others and the world remains and is immortal." — Albert Pike',
+      '"The greatest legacy one can pass on to one\'s children and grandchildren is not money, but rather a legacy of character and faith." — Billy Graham',
+    ],
+  },
+  {
+    theme: 'Death',
+    quotes: [
+      '"To the well-organized mind, death is but the next great adventure." — J.K. Rowling',
+      '"The fear of death follows from the fear of life. A man who lives fully is prepared to die at any time." — Mark Twain',
+      '"Death is not the opposite of life, but a part of it." — Haruki Murakami',
+    ],
+  },
+
+  // === CREATIVITY & DREAMS THEMES ===
+  {
+    theme: 'Creativity',
+    quotes: [
+      '"Creativity is intelligence having fun." — Albert Einstein',
+      '"The chief enemy of creativity is good sense." — Pablo Picasso',
+      '"Creativity takes courage." — Henri Matisse',
+    ],
+  },
+  {
+    theme: 'Dreams',
+    quotes: [
+      '"All our dreams can come true, if we have the courage to pursue them." — Walt Disney',
+      '"The future belongs to those who believe in the beauty of their dreams." — Eleanor Roosevelt',
+      '"A dream you dream alone is only a dream. A dream you dream together is reality." — John Lennon',
+    ],
+  },
+  {
+    theme: 'Imagination',
+    quotes: [
+      '"Logic will get you from A to B. Imagination will take you everywhere." — Albert Einstein',
+      '"Imagination is the beginning of creation." — George Bernard Shaw',
+      '"The man who has no imagination has no wings." — Muhammad Ali',
+    ],
+  },
+
+  // === RISK & OPPORTUNITY THEMES ===
+  {
+    theme: 'Risk',
+    quotes: [
+      '"Only those who will risk going too far can possibly find out how far one can go." — T.S. Eliot',
+      '"Take risks: if you win, you will be happy; if you lose, you will be wise." — Unknown',
+      '"The biggest risk is not taking any risk." — Mark Zuckerberg',
+    ],
+  },
+  {
+    theme: 'Opportunity',
+    quotes: [
+      '"In the middle of difficulty lies opportunity." — Albert Einstein',
+      '"Opportunities don\'t happen. You create them." — Chris Grosser',
+      '"A pessimist sees the difficulty in every opportunity; an optimist sees the opportunity in every difficulty." — Winston Churchill',
+    ],
+  },
+
+  // === NATURE & ENVIRONMENT THEMES ===
+  {
+    theme: 'Nature',
+    quotes: [
+      '"In every walk with nature, one receives far more than he seeks." — John Muir',
+      '"Look deep into nature, and then you will understand everything better." — Albert Einstein',
+      '"The Earth does not belong to us: we belong to the Earth." — Chief Seattle',
+    ],
+  },
+  {
+    theme: 'Technology',
+    quotes: [
+      '"Technology is a useful servant but a dangerous master." — Christian Lous Lange',
+      '"The real danger is not that computers will begin to think like men, but that men will begin to think like computers." — Sydney J. Harris',
+      '"It has become appallingly obvious that our technology has exceeded our humanity." — Albert Einstein',
+    ],
+  },
+
+  // === PERSPECTIVE & TRUTH THEMES ===
+  {
+    theme: 'Perspective',
+    quotes: [
+      '"We don\'t see things as they are, we see them as we are." — Anaïs Nin',
+      '"Everything we hear is an opinion, not a fact. Everything we see is a perspective, not the truth." — Marcus Aurelius',
+      '"If you change the way you look at things, the things you look at change." — Wayne Dyer',
+    ],
+  },
+  {
+    theme: 'Simplicity',
+    quotes: [
+      '"Simplicity is the ultimate sophistication." — Leonardo da Vinci',
+      '"Life is really simple, but we insist on making it complicated." — Confucius',
+      '"The ability to simplify means to eliminate the unnecessary so that the necessary may speak." — Hans Hofmann',
+    ],
+  },
+  {
+    theme: 'Balance',
+    quotes: [
+      '"Happiness is not a matter of intensity but of balance, order, rhythm and harmony." — Thomas Merton',
+      '"Life is like riding a bicycle. To keep your balance, you must keep moving." — Albert Einstein',
+      '"Balance is not something you find, it\'s something you create." — Jana Kingsford',
+    ],
+  },
+
+  // === ACTION & WORDS THEMES ===
+  {
+    theme: 'Action',
+    quotes: [
+      '"The way to get started is to quit talking and begin doing." — Walt Disney',
+      '"Well done is better than well said." — Benjamin Franklin',
+      '"Action is the foundational key to all success." — Pablo Picasso',
+    ],
+  },
+  {
+    theme: 'Words',
+    quotes: [
+      '"Words are, of course, the most powerful drug used by mankind." — Rudyard Kipling',
+      '"The pen is mightier than the sword." — Edward Bulwer-Lytton',
+      '"Handle them carefully, for words have more power than atom bombs." — Pearl Strachan Hurd',
+    ],
+  },
+  {
+    theme: 'Silence',
+    quotes: [
+      '"Silence is a source of great strength." — Lao Tzu',
+      '"In the end, we will remember not the words of our enemies, but the silence of our friends." — Martin Luther King Jr.',
+      '"The quieter you become, the more you can hear." — Ram Dass',
+    ],
+  },
+
+  // === CONFLICT & PEACE THEMES ===
+  {
+    theme: 'Conflict',
+    quotes: [
+      '"The greatest victory is that which requires no battle." — Sun Tzu',
+      '"Peace is not absence of conflict, it is the ability to handle conflict by peaceful means." — Ronald Reagan',
+      '"Whenever you\'re in conflict with someone, there is one factor that can make the difference between damaging your relationship and deepening it. That factor is attitude." — William James',
+    ],
+  },
+  {
+    theme: 'Unity',
+    quotes: [
+      '"Alone we can do so little; together we can do so much." — Helen Keller',
+      '"Unity is strength... when there is teamwork and collaboration, wonderful things can be achieved." — Mattie Stepanek',
+      '"We may have all come on different ships, but we\'re in the same boat now." — Martin Luther King Jr.',
+    ],
+  },
+
+  // === WEALTH & POVERTY THEMES ===
+  {
+    theme: 'Wealth',
+    quotes: [
+      '"Wealth consists not in having great possessions, but in having few wants." — Epictetus',
+      '"It is not the man who has too little, but the man who craves more, that is poor." — Seneca',
+      '"The real measure of your wealth is how much you\'d be worth if you lost all your money." — Unknown',
+    ],
+  },
+  {
+    theme: 'Gratitude',
+    quotes: [
+      '"Gratitude turns what we have into enough." — Anonymous',
+      '"When I started counting my blessings, my whole life turned around." — Willie Nelson',
+      '"Gratitude is not only the greatest of virtues, but the parent of all others." — Cicero',
+    ],
+  },
+
+  // === YOUTH & AGE THEMES ===
+  {
+    theme: 'Youth',
+    quotes: [
+      '"Youth is wasted on the young." — George Bernard Shaw',
+      '"The young do not know enough to be prudent, and therefore they attempt the impossible, and achieve it, generation after generation." — Pearl S. Buck',
+      '"Youth is the gift of nature, but age is a work of art." — Stanislaw Jerzy Lec',
+    ],
+  },
+  {
+    theme: 'Memory',
+    quotes: [
+      '"The past beats inside me like a second heart." — John Banville',
+      '"Memory is the diary we all carry about with us." — Oscar Wilde',
+      '"We do not remember days, we remember moments." — Cesare Pavese',
     ],
   },
 ];

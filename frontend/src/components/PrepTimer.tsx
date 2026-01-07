@@ -1,26 +1,53 @@
 /**
  * PrepTimer Component
  * 
- * Shows a countdown timer (default 2 minutes) for the user to prepare.
+ * Shows a countdown timer for the user to prepare.
  * Displays the selected quote and allows skipping to recording early.
+ * Supports switching between High School (2min) and Middle School (3min) formats.
  */
 
 import { useState, useEffect } from 'react';
+import { SpeechFormat, SPEECH_FORMATS } from '../types';
 
 // Props that this component receives from its parent
 interface PrepTimerProps {
   selectedQuote: string;                          // The quote the user selected
-  durationSeconds?: number;                       // Timer duration (default: 120 = 2 minutes)
+  speechFormat: SpeechFormat;                     // Current speech format
   onTimerComplete: (remainingTime: number) => void;  // Called when timer finishes or user skips
+  onFormatChange: (format: SpeechFormat) => void;    // Called when format changes
 }
 
 function PrepTimer({ 
   selectedQuote, 
-  durationSeconds = 120, 
-  onTimerComplete 
+  speechFormat,
+  onTimerComplete,
+  onFormatChange,
 }: PrepTimerProps) {
-  // Track remaining time in seconds
-  const [timeLeft, setTimeLeft] = useState(durationSeconds);
+  // Get the current format's duration (use this as source of truth)
+  const currentDuration = SPEECH_FORMATS[speechFormat].prepDuration;
+  
+  // Track remaining time in seconds - initialize to current format duration
+  const [timeLeft, setTimeLeft] = useState(currentDuration);
+  
+  // Track elapsed time (used for format switching)
+  const elapsedTime = currentDuration - timeLeft;
+
+  // Get the alternate format
+  const alternateFormat: SpeechFormat = speechFormat === 'high-school' ? 'middle-school' : 'high-school';
+  const currentFormatName = SPEECH_FORMATS[speechFormat].name;
+  const alternateFormatName = SPEECH_FORMATS[alternateFormat].name;
+  const alternateDuration = SPEECH_FORMATS[alternateFormat].prepDuration;
+
+  // Handle format switch - keep elapsed time constant
+  // Example: 1:30 left on HS (30s elapsed) → 2:30 left on MS (30s elapsed)
+  const handleFormatSwitch = () => {
+    const newFormat = alternateFormat;
+    const newDuration = SPEECH_FORMATS[newFormat].prepDuration;
+    // Keep elapsed time the same, calculate new remaining time
+    const newTimeLeft = Math.max(0, newDuration - elapsedTime);
+    setTimeLeft(newTimeLeft);
+    onFormatChange(newFormat);
+  };
 
   // Format seconds into MM:SS display
   const formatTime = (seconds: number): string => {
@@ -30,8 +57,8 @@ function PrepTimer({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Calculate progress percentage for the visual progress ring
-  const progress = ((durationSeconds - timeLeft) / durationSeconds) * 100;
+  // Calculate progress percentage for the visual progress ring (use current format duration)
+  const progress = ((currentDuration - timeLeft) / currentDuration) * 100;
 
   // Set up the countdown timer
   useEffect(() => {
@@ -57,7 +84,12 @@ function PrepTimer({
         <div style={styles.header}>
           <div style={styles.kicker}>PREPARATION</div>
           <h2 style={styles.title}>Preparation Time</h2>
-          <p style={styles.subtitle}>Use these two minutes to structure your speech before recording.</p>
+          <p style={styles.subtitle}>
+            {speechFormat === 'high-school' 
+              ? 'Use these two minutes to structure your speech before recording.'
+              : 'Use these three minutes to structure your speech before recording.'}
+          </p>
+          <div style={styles.formatBadge}>{currentFormatName}</div>
         </div>
         
         {/* Selected Quote */}
@@ -112,7 +144,18 @@ function PrepTimer({
             onClick={() => onTimerComplete(timeLeft)}
             style={styles.primaryButton}
           >
-            Skip & Start Recording
+            End Prep & Start Recording
+          </button>
+          <button
+            onClick={handleFormatSwitch}
+            style={styles.formatSwitchButton}
+          >
+            Switch to {alternateFormatName}
+            <span style={styles.formatSwitchHint}>
+              {speechFormat === 'high-school' 
+                ? `(3min prep, 4min speak) → ${formatTime(Math.max(0, alternateDuration - elapsedTime))} remaining`
+                : `(2min prep, 5min speak) → ${formatTime(Math.max(0, alternateDuration - elapsedTime))} remaining`}
+            </span>
           </button>
         </div>
       </div>
@@ -248,7 +291,9 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: '48px',
     width: '100%',
     display: 'flex',
-    justifyContent: 'center',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '16px',
   },
   primaryButton: {
     background: '#000000',
@@ -261,6 +306,41 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     transition: 'background-color 200ms ease, transform 200ms ease, box-shadow 200ms ease',
     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+    width: '340px',
+    textAlign: 'center',
+  },
+  formatSwitchButton: {
+    background: 'transparent',
+    color: '#6b7280',
+    border: '1px solid #e5e7eb',
+    padding: '12px 24px',
+    fontSize: '14px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontWeight: 600,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '4px',
+    transition: 'all 200ms ease',
+    width: '340px',
+  },
+  formatSwitchHint: {
+    fontSize: '12px',
+    fontWeight: 400,
+    color: '#9ca3af',
+  },
+  formatBadge: {
+    display: 'inline-block',
+    marginTop: '12px',
+    padding: '6px 12px',
+    background: '#f3f4f6',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: '#374151',
+    letterSpacing: '0.02em',
   },
 };
 

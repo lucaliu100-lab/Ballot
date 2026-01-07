@@ -16,9 +16,348 @@
  * - Start a new round (new theme/quotes)
  */
 
-import { useEffect, useRef, useMemo, useState } from 'react';
+import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { DebateAnalysis } from '../types';
+
+// PDF Export function - generates a printable version and triggers print dialog
+function generatePDFContent(
+  analysis: DebateAnalysis,
+  theme: string,
+  quote: string,
+  statsInfo: { duration: string; words: number; wpm: number; fillers: number }
+): string {
+  const formatScore = (score: number) => score.toFixed(1);
+  
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Tournament Ballot - ${theme}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: #111827;
+      line-height: 1.5;
+      padding: 40px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    .tier-badge {
+      display: inline-block;
+      background: #111827;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+    .title { font-size: 28px; font-weight: 800; margin-bottom: 8px; }
+    .subtitle { color: #6b7280; font-size: 14px; }
+    .overall-score {
+      text-align: center;
+      margin: 24px 0;
+      padding: 24px;
+      background: #f9fafb;
+      border-radius: 12px;
+    }
+    .overall-score-value {
+      font-size: 48px;
+      font-weight: 800;
+      color: #ca8a04;
+    }
+    .overall-score-label { font-size: 12px; color: #6b7280; letter-spacing: 0.1em; }
+    .scores-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .score-card {
+      text-align: center;
+      padding: 16px;
+      background: #f9fafb;
+      border-radius: 8px;
+    }
+    .score-card-value { font-size: 24px; font-weight: 800; color: #ca8a04; }
+    .score-card-label { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    .stats-bar {
+      display: flex;
+      justify-content: space-around;
+      padding: 16px;
+      background: #111827;
+      color: white;
+      border-radius: 8px;
+      margin-bottom: 32px;
+    }
+    .stat-item { text-align: center; }
+    .stat-label { font-size: 10px; color: #9ca3af; letter-spacing: 0.1em; }
+    .stat-value { font-size: 16px; font-weight: 700; }
+    .section { margin-bottom: 24px; page-break-inside: avoid; }
+    .section-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #111827;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .analysis-item {
+      margin-bottom: 16px;
+      padding: 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+    }
+    .analysis-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .analysis-title { font-weight: 700; font-size: 14px; }
+    .analysis-score {
+      background: #111827;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .analysis-feedback { font-size: 13px; color: #4b5563; line-height: 1.6; }
+    .priority-box {
+      background: #fff1f2;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .priority-title { font-size: 16px; font-weight: 700; color: #be123c; margin-bottom: 16px; }
+    .priority-item { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(190, 18, 60, 0.1); }
+    .priority-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .priority-item-title { font-weight: 700; margin-bottom: 8px; }
+    .priority-detail { font-size: 13px; color: #4b5563; margin-bottom: 4px; }
+    .strengths-list { list-style: none; }
+    .strength-item {
+      padding: 8px 12px;
+      background: #f0fdf4;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: #166534;
+    }
+    .strength-item:before { content: "✓ "; color: #22c55e; font-weight: bold; }
+    .drill-box {
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .drill-title { font-size: 16px; font-weight: 700; color: #0369a1; margin-bottom: 12px; }
+    .drill-text { font-size: 14px; color: #0c4a6e; line-height: 1.6; }
+    .quote-box {
+      margin-top: 24px;
+      padding: 16px;
+      background: #fafafa;
+      border-left: 4px solid #ca8a04;
+      font-style: italic;
+      color: #4b5563;
+    }
+    .quote-label { font-style: normal; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
+    .footer {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+      text-align: center;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    @media print {
+      body { padding: 20px; }
+      .section { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="tier-badge">${analysis.performanceTier.toUpperCase()} TIER</div>
+    <h1 class="title">Tournament Ballot</h1>
+    <p class="subtitle">NSDA-Standard Impromptu Evaluation</p>
+  </div>
+
+  <div class="overall-score">
+    <div class="overall-score-label">OVERALL SCORE</div>
+    <div class="overall-score-value">${formatScore(analysis.overallScore)}/10.0</div>
+    <div style="margin-top: 8px; font-size: 14px;">
+      Tournament Ready: <strong style="color: ${analysis.tournamentReady ? '#059669' : '#dc2626'}">${analysis.tournamentReady ? 'YES' : 'NO'}</strong>
+    </div>
+  </div>
+
+  <div class="scores-grid">
+    <div class="score-card">
+      <div class="score-card-value">${formatScore(analysis.categoryScores.content.score)}</div>
+      <div class="score-card-label">Content (40%)</div>
+    </div>
+    <div class="score-card">
+      <div class="score-card-value">${formatScore(analysis.categoryScores.delivery.score)}</div>
+      <div class="score-card-label">Delivery (30%)</div>
+    </div>
+    <div class="score-card">
+      <div class="score-card-value">${formatScore(analysis.categoryScores.language.score)}</div>
+      <div class="score-card-label">Language (15%)</div>
+    </div>
+    <div class="score-card">
+      <div class="score-card-value">${formatScore(analysis.categoryScores.bodyLanguage.score)}</div>
+      <div class="score-card-label">Body Language (15%)</div>
+    </div>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat-item">
+      <div class="stat-label">DURATION</div>
+      <div class="stat-value">${statsInfo.duration}</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">WORDS</div>
+      <div class="stat-value">${statsInfo.words}</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">PACE</div>
+      <div class="stat-value">${statsInfo.wpm} WPM</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">FILLERS</div>
+      <div class="stat-value">${statsInfo.fillers} total</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">| Content Analysis (40%)</h2>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Topic Adherence</span>
+        <span class="analysis-score">${formatScore(analysis.contentAnalysis.topicAdherence.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.contentAnalysis.topicAdherence.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Argument Structure</span>
+        <span class="analysis-score">${formatScore(analysis.contentAnalysis.argumentStructure.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.contentAnalysis.argumentStructure.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Depth of Analysis</span>
+        <span class="analysis-score">${formatScore(analysis.contentAnalysis.depthOfAnalysis.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.contentAnalysis.depthOfAnalysis.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">| Delivery Analysis (30%)</h2>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Vocal Variety</span>
+        <span class="analysis-score">${formatScore(analysis.deliveryAnalysis.vocalVariety.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.deliveryAnalysis.vocalVariety.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Pacing & Tempo</span>
+        <span class="analysis-score">${formatScore(analysis.deliveryAnalysis.pacing.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.deliveryAnalysis.pacing.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">| Language Use (15%)</h2>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Vocabulary Sophistication</span>
+        <span class="analysis-score">${formatScore(analysis.languageAnalysis.vocabulary.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.languageAnalysis.vocabulary.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Rhetorical Devices</span>
+        <span class="analysis-score">${formatScore(analysis.languageAnalysis.rhetoricalDevices.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.languageAnalysis.rhetoricalDevices.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">| Body Language & Presence (15%)</h2>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Eye Contact</span>
+        <span class="analysis-score">${formatScore(analysis.bodyLanguageAnalysis.eyeContact.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.bodyLanguageAnalysis.eyeContact.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">Gestures & Posture</span>
+        <span class="analysis-score">${formatScore(analysis.bodyLanguageAnalysis.gestures.score)}</span>
+      </div>
+      <p class="analysis-feedback">${analysis.bodyLanguageAnalysis.gestures.feedback.replace(/\*\*/g, '')}</p>
+    </div>
+  </div>
+
+  <div class="priority-box">
+    <h3 class="priority-title">Priority Improvements</h3>
+    ${analysis.priorityImprovements.map(imp => `
+      <div class="priority-item">
+        <div class="priority-item-title">#${imp.priority} ${imp.issue}</div>
+        <div class="priority-detail"><strong>Action:</strong> ${imp.action}</div>
+        <div class="priority-detail"><strong>Impact:</strong> ${imp.impact}</div>
+      </div>
+    `).join('')}
+  </div>
+
+  <div class="drill-box">
+    <h3 class="drill-title">Practice Drill</h3>
+    <p class="drill-text">${analysis.practiceDrill}</p>
+    <div style="margin-top: 12px; font-size: 13px; font-weight: 600; color: #0369a1;">
+      Next Focus: ${analysis.nextSessionFocus.primary}
+    </div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">| Strengths to Maintain</h2>
+    <ul class="strengths-list">
+      ${analysis.strengths.map(s => `<li class="strength-item">${s}</li>`).join('')}
+    </ul>
+  </div>
+
+  <div class="quote-box">
+    <div class="quote-label">Theme: ${theme}</div>
+    "${quote}"
+  </div>
+
+  <div class="footer">
+    Generated by WinBallot • ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+  </div>
+</body>
+</html>
+  `;
+}
 
 // Helper to get color based on score
 function getScoreColor(score: number): string {
@@ -66,35 +405,92 @@ function parseFeedback(text: string) {
 
   if (!text) return sections;
 
-  // Extract Score Justification
-  const justificationMatch = text.match(/\*\*Score Justification:\*\*([\s\S]*?)(?=\*\*|$)/i);
-  if (justificationMatch) sections.justification = justificationMatch[1].trim();
+  // CRITICAL: First normalize escaped newlines to actual newlines
+  // The model may return \\n (escaped) instead of actual newlines in JSON
+  let normalizedText = text
+    .replace(/\\n/g, '\n')           // Convert escaped newlines
+    .replace(/\\t/g, ' ')            // Convert escaped tabs
+    .replace(/\r\n/g, '\n')          // Normalize Windows line endings
+    .replace(/\r/g, '\n');           // Normalize old Mac line endings
 
-  // Extract What This Means
-  const meaningMatch = text.match(/\*\*What This Means:\*\*([\s\S]*?)(?=\*\*|$)/i);
-  if (meaningMatch) sections.meaning = meaningMatch[1].trim();
-
-  // Extract Evidence bullet points
-  const evidenceLines = text.match(/\*\*Evidence from Speech:\*\*([\s\S]*?)(?=\*\*|$)/i);
-  if (evidenceLines) {
-    sections.evidence = evidenceLines[1]
-      .split("\n")
-      .map(l => l.replace(/^[-*]\s*/, "").trim())
-      .filter(l => l.length > 0);
+  // Try multiple header variations for robustness
+  // Score Justification patterns
+  const justificationPatterns = [
+    /\*\*Score Justification:?\*\*\s*([\s\S]*?)(?=\*\*Evidence|\*\*What This|\*\*How to|\*\*Improvement|$)/i,
+    /\*\*Justification:?\*\*\s*([\s\S]*?)(?=\*\*Evidence|\*\*What This|\*\*How to|\*\*Improvement|$)/i,
+    /Score Justification:?\s*([\s\S]*?)(?=Evidence from|What This|How to Improve|Improvement|$)/i,
+  ];
+  
+  for (const pattern of justificationPatterns) {
+    const match = normalizedText.match(pattern);
+    if (match && match[1]?.trim()) {
+      sections.justification = match[1].replace(/\*\*/g, '').trim();
+      break;
+    }
   }
 
-  // Extract How to Improve bullet points
-  const improvementLines = text.match(/\*\*How to Improve:\*\*([\s\S]*?)(?=\*\*|$)/i);
-  if (improvementLines) {
-    sections.improvement = improvementLines[1]
-      .split("\n")
-      .map(l => l.replace(/^\d+\.\s*/, "").trim())
-      .filter(l => l.length > 0);
+  // Evidence patterns
+  const evidencePatterns = [
+    /\*\*Evidence(?:\s+from\s+Speech)?:?\*\*\s*([\s\S]*?)(?=\*\*What This|\*\*How to|\*\*Improvement|\*\*Judge|$)/i,
+    /Evidence(?:\s+from\s+Speech)?:?\s*([\s\S]*?)(?=What This|How to Improve|Improvement|Judge|$)/i,
+  ];
+  
+  for (const pattern of evidencePatterns) {
+    const match = normalizedText.match(pattern);
+    if (match && match[1]?.trim()) {
+      sections.evidence = match[1]
+        .split("\n")
+        .map(l => l.replace(/^[-*•]\s*/, "").replace(/^\d+\.\s*/, "").trim())
+        .filter(l => l.length > 0 && !l.startsWith('**'));
+      break;
+    }
   }
 
-  // If no sections found, treat whole text as justification
+  // What This Means / Judge's Rationale patterns
+  const meaningPatterns = [
+    /\*\*What This Means:?\*\*\s*([\s\S]*?)(?=\*\*How to|\*\*Improvement|$)/i,
+    /\*\*Judge'?s? Rationale:?\*\*\s*([\s\S]*?)(?=\*\*How to|\*\*Improvement|$)/i,
+    /\*\*Competitive Implication:?\*\*\s*([\s\S]*?)(?=\*\*How to|\*\*Improvement|$)/i,
+    /What This Means:?\s*([\s\S]*?)(?=How to Improve|Improvement|$)/i,
+    /Judge'?s? Rationale:?\s*([\s\S]*?)(?=How to Improve|Improvement|$)/i,
+  ];
+  
+  for (const pattern of meaningPatterns) {
+    const match = normalizedText.match(pattern);
+    if (match && match[1]?.trim()) {
+      sections.meaning = match[1].replace(/\*\*/g, '').trim();
+      break;
+    }
+  }
+
+  // Improvement patterns
+  const improvementPatterns = [
+    /\*\*How to Improve:?\*\*\s*([\s\S]*?)$/i,
+    /\*\*Improvements?:?\*\*\s*([\s\S]*?)$/i,
+    /\*\*Actionable Steps?:?\*\*\s*([\s\S]*?)$/i,
+    /How to Improve:?\s*([\s\S]*?)$/i,
+    /Improvements?:?\s*([\s\S]*?)$/i,
+  ];
+  
+  for (const pattern of improvementPatterns) {
+    const match = normalizedText.match(pattern);
+    if (match && match[1]?.trim()) {
+      sections.improvement = match[1]
+        .split("\n")
+        .map(l => l.replace(/^\d+\.\s*/, "").replace(/^[-*•]\s*/, "").trim())
+        .filter(l => l.length > 0 && !l.startsWith('**'));
+      break;
+    }
+  }
+
+  // If no structured sections found, use the whole text as justification
   if (!sections.justification && !sections.evidence.length && !sections.meaning && !sections.improvement.length) {
-    sections.justification = text.replace(/\*\*/g, '').trim();
+    sections.justification = normalizedText.replace(/\*\*/g, '').trim();
+  }
+  
+  // If we got justification but nothing else, it might be unstructured - just use justification
+  if (sections.justification && !sections.evidence.length && !sections.meaning && !sections.improvement.length) {
+    // That's fine - we'll show only the justification and "FULL FEEDBACK" will show the rest
   }
 
   return sections;
@@ -175,7 +571,7 @@ const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetri
 
             {parsed.improvement.length > 0 && (
               <div style={styles.detailSection}>
-                <div style={styles.detailLabel}>CHAMPIONSHIP DRILLS</div>
+                <div style={styles.detailLabel}>IMPROVEMENTS</div>
                 <div style={styles.improvementGrid}>
                   {parsed.improvement.map((item, i) => (
                     <div key={i} style={styles.improvementCard}>
@@ -209,6 +605,7 @@ function FeedbackReport({
   const overallLengthDeduction = Number((analysis as any)?.__rubric?.overallLengthDeduction || 0);
   // Track if we've already saved this session
   const savedRef = useRef(false);
+  const [isExporting, setIsExporting] = useState(false);
   
   // Generate a stable session key based on content (prevents duplicates across re-mounts)
   const sessionId = useMemo(() => {
@@ -396,6 +793,48 @@ function FeedbackReport({
     typeof analysis.speechStats?.fillerWordCount === 'number' && analysis.speechStats.fillerWordCount > 0
       ? analysis.speechStats.fillerWordCount
       : (analysis.deliveryAnalysis?.fillerWords?.total || 0);
+
+  // PDF Export handler
+  const handleExportPDF = useCallback(() => {
+    setIsExporting(true);
+    
+    try {
+      const pdfContent = generatePDFContent(analysis, theme, quote, {
+        duration: statsDuration,
+        words: statsWords,
+        wpm: statsWpm,
+        fillers: statsFillers,
+      });
+      
+      // Open a new window with the PDF content
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        alert('Please allow popups to export PDF');
+        setIsExporting(false);
+        return;
+      }
+      
+      printWindow.document.write(pdfContent);
+      printWindow.document.close();
+      
+      // Wait for content to load, then trigger print
+      printWindow.onload = () => {
+        setTimeout(() => {
+          printWindow.print();
+          setIsExporting(false);
+        }, 250);
+      };
+      
+      // Fallback if onload doesn't fire
+      setTimeout(() => {
+        setIsExporting(false);
+      }, 2000);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      alert('Failed to export PDF. Please try again.');
+      setIsExporting(false);
+    }
+  }, [analysis, theme, quote, statsDuration, statsWords, statsWpm, statsFillers]);
 
   return (
     <div style={styles.container}>
@@ -620,6 +1059,13 @@ function FeedbackReport({
       <div style={styles.footerActions}>
         <button onClick={onRedoRound} style={styles.secondaryButton}>Redo Round</button>
         <button onClick={onNewRound} style={styles.primaryButton}>Start New Round</button>
+        <button 
+          onClick={handleExportPDF} 
+          disabled={isExporting}
+          style={styles.exportButton}
+        >
+          {isExporting ? 'Preparing PDF...' : 'Export to PDF'}
+        </button>
       </div>
     </div>
   );
@@ -1175,6 +1621,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '1rem',
     fontWeight: 700,
     cursor: 'pointer',
+  },
+  exportButton: {
+    background: '#f3f4f6',
+    color: '#374151',
+    border: '1px solid #d1d5db',
+    padding: '14px 40px',
+    borderRadius: '8px',
+    fontSize: '1rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
   },
 };
 
