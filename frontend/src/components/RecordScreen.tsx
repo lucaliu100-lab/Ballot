@@ -63,6 +63,11 @@ function RecordScreen({
   
   // URL to preview the recorded video
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  
+  // Custom video player state
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
 
   // Total available time (base duration + remaining prep time)
   const totalTime = baseDuration + remainingPrepTime;
@@ -331,6 +336,57 @@ function RecordScreen({
     }
   };
 
+  // Custom video player controls
+  const handlePlayPause = () => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    
+    if (video.paused) {
+      video.play();
+      setIsPlaying(true);
+    } else {
+      video.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    setCurrentTime(video.currentTime);
+  };
+
+  const handleLoadedMetadata = () => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    // Use recorded duration as fallback if video metadata duration is unreliable
+    const metaDuration = video.duration;
+    const actualDuration = Number.isFinite(metaDuration) && metaDuration > 0 
+      ? metaDuration 
+      : recordingDuration;
+    setVideoDuration(actualDuration);
+  };
+
+  const handleVideoEnded = () => {
+    setIsPlaying(false);
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const video = previewVideoRef.current;
+    if (!video || videoDuration <= 0) return;
+    
+    const bar = e.currentTarget;
+    const rect = bar.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percent = clickX / rect.width;
+    const newTime = percent * videoDuration;
+    
+    video.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const progressPercent = videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0;
+
   /**
    * Upload the recorded video to the backend
    */
@@ -438,14 +494,44 @@ function RecordScreen({
           
           {/* Recording preview (shown after recording stops) */}
           {previewUrl && (
-            <video
-              ref={previewVideoRef}
-              src={previewUrl}
-              controls
-              playsInline
-              preload="auto"
-              style={styles.previewVideo}
-            />
+            <>
+              <video
+                ref={previewVideoRef}
+                src={previewUrl}
+                playsInline
+                preload="auto"
+                style={styles.previewVideo}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                onEnded={handleVideoEnded}
+                onClick={handlePlayPause}
+              />
+              {/* Custom video controls overlay */}
+              <div style={styles.customControls}>
+                <button onClick={handlePlayPause} style={styles.playPauseBtn}>
+                  {isPlaying ? '⏸' : '▶'}
+                </button>
+                <div style={styles.progressContainer} onClick={handleSeek}>
+                  <div style={styles.progressTrack}>
+                    <div 
+                      style={{
+                        ...styles.progressFill,
+                        width: `${progressPercent}%`,
+                      }} 
+                    />
+                    <div 
+                      style={{
+                        ...styles.progressThumb,
+                        left: `${progressPercent}%`,
+                      }} 
+                    />
+                  </div>
+                </div>
+                <span style={styles.timeDisplay}>
+                  {formatTime(Math.floor(currentTime))} / {formatTime(Math.floor(videoDuration))}
+                </span>
+              </div>
+            </>
           )}
 
           {/* Timer overlay - top right */}
@@ -590,6 +676,71 @@ const styles: Record<string, React.CSSProperties> = {
     objectFit: 'contain',
     display: 'block',
     background: '#000',
+    cursor: 'pointer',
+  },
+  // Custom video controls
+  customControls: {
+    position: 'absolute',
+    bottom: '0',
+    left: '0',
+    right: '0',
+    background: 'linear-gradient(transparent, rgba(0,0,0,0.8))',
+    padding: '20px 16px 16px 16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  playPauseBtn: {
+    background: 'rgba(255,255,255,0.2)',
+    border: 'none',
+    color: '#ffffff',
+    fontSize: '1.2rem',
+    width: '40px',
+    height: '40px',
+    borderRadius: '50%',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  progressContainer: {
+    flex: 1,
+    height: '20px',
+    display: 'flex',
+    alignItems: 'center',
+    cursor: 'pointer',
+  },
+  progressTrack: {
+    width: '100%',
+    height: '6px',
+    background: 'rgba(255,255,255,0.3)',
+    borderRadius: '3px',
+    position: 'relative',
+  },
+  progressFill: {
+    height: '100%',
+    background: '#10b981',
+    borderRadius: '3px',
+    transition: 'width 0.1s linear',
+  },
+  progressThumb: {
+    position: 'absolute',
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '14px',
+    height: '14px',
+    background: '#ffffff',
+    borderRadius: '50%',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+  },
+  timeDisplay: {
+    color: '#ffffff',
+    fontSize: '0.85rem',
+    fontFamily: 'monospace',
+    minWidth: '90px',
+    textAlign: 'right',
+    flexShrink: 0,
   },
   timerOverlay: {
     position: 'absolute',

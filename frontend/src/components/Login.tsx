@@ -26,6 +26,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
   const [view, setView] = useState<AuthView>(initialView);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -92,6 +93,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
     e.preventDefault();
     if (!supabase) return setError('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your deployment environment.');
     if (!email || !password) return setError('Please fill in all fields');
+    if (!fullName.trim()) return setError('Please enter your full name');
 
     setIsLoading(true);
     setError(null);
@@ -99,6 +101,11 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+          },
+        },
       });
       if (error) throw error;
       
@@ -204,7 +211,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder=""
                 style={styles.input}
                 disabled={isLoading}
               />
@@ -213,7 +220,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder=""
                 style={styles.input}
                 disabled={isLoading}
               />
@@ -259,32 +266,44 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
             </div>
 
             <form onSubmit={handleSignUp} style={styles.form}>
-            <label style={styles.label}>Email Address</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              style={styles.input}
-              disabled={isLoading}
+              <label style={styles.label}>Full Name <span style={{ color: '#dc2626' }}>*</span></label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder=""
+                style={styles.input}
+                disabled={isLoading}
+                required
               />
-              <label style={styles.label}>Create Password</label>
+              <label style={styles.label}>Email Address <span style={{ color: '#dc2626' }}>*</span></label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder=""
+                style={styles.input}
+                disabled={isLoading}
+                required
+              />
+              <label style={styles.label}>Create Password <span style={{ color: '#dc2626' }}>*</span></label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Min. 6 characters"
+                placeholder=""
                 style={styles.input}
                 disabled={isLoading}
-            />
-            <button 
-              type="submit" 
+                required
+              />
+              <button 
+                type="submit" 
                 style={styles.primaryButton}
                 disabled={isLoading}
-            >
+              >
                 {isLoading ? 'Creating Account...' : 'Sign Up'}
-            </button>
-          </form>
+              </button>
+            </form>
 
             <p style={styles.footerText}>
               Already have an account?{' '}
@@ -309,7 +328,7 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              placeholder=""
               style={styles.input}
               disabled={isLoading}
             />
@@ -411,8 +430,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '-8px',
   },
   input: {
-    background: '#ffffff',
-    border: '1px solid #e5e5e5',
+    background: '#f9fafb',
+    border: '1.5px solid #666666',
     borderRadius: '8px',
     padding: '12px 16px',
     fontSize: '1rem',
@@ -444,7 +463,7 @@ const styles: Record<string, React.CSSProperties> = {
   oauthButton: {
     background: '#ffffff',
     color: '#333333',
-    border: '1px solid #e5e5e5',
+    border: '1.5px solid #666666',
     padding: '12px',
     fontSize: '0.95rem',
     fontWeight: 500,

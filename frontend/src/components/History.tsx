@@ -270,10 +270,10 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   const stdDev = calculateStdDev(scores);
   let consistencyScore = Math.max(0, Math.min(100, Math.round(100 - (stdDev * 20)))); 
   let consistencyLabel = "LOW";
-  let consistencyColor = "#dc2626"; // red
-  if (consistencyScore >= 85) { consistencyLabel = "HIGH"; consistencyColor = "#059669"; } // green
+  let consistencyColor = "#be123c"; // Crimson
+  if (consistencyScore >= 85) { consistencyLabel = "HIGH"; consistencyColor = "#059669"; } // Emerald
   else if (consistencyScore >= 70) { consistencyLabel = "MED-HIGH"; consistencyColor = "#059669"; }
-  else if (consistencyScore >= 55) { consistencyLabel = "MEDIUM"; consistencyColor = "#d97706"; } // yellow
+  else if (consistencyScore >= 55) { consistencyLabel = "MEDIUM"; consistencyColor = "#b45309"; } // Amber
   else if (isNaN(consistencyScore)) { consistencyScore = 0; consistencyLabel = "-"; consistencyColor = "#9ca3af"; }
 
   // 3. Metric: Avg Duration
@@ -287,10 +287,10 @@ function History({ onClose, onSelectSession }: HistoryProps) {
   const weeksActive = Math.max(1, (Date.now() - firstSessionTime) / (1000 * 60 * 60 * 24 * 7));
   const sessionsPerWeek = totalSessions / weeksActive;
   let freqLabel = "LOW";
-  let freqColor = "#dc2626";
+  let freqColor = "#be123c";
   if (sessionsPerWeek >= 4) { freqLabel = "EXCELLENT"; freqColor = "#059669"; }
   else if (sessionsPerWeek >= 2.5) { freqLabel = "GOOD"; freqColor = "#059669"; }
-  else if (sessionsPerWeek >= 1.0) { freqLabel = "FAIR"; freqColor = "#d97706"; }
+  else if (sessionsPerWeek >= 1.0) { freqLabel = "FAIR"; freqColor = "#b45309"; }
 
   // 5. Metric: Avg Pace
   const avgWpm = totalSessions > 0
@@ -329,8 +329,8 @@ function History({ onClose, onSelectSession }: HistoryProps) {
 
   if (averageScore >= 9.0) {
     tierName = "FINALS";
-    tierColor = "#059669"; // Green
-    tierGradient = "linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%)";
+    tierColor = "#065f46"; // Deep Forest Green
+    tierGradient = "linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%)";
     tierTextColor = "#065f46";
     nextTier = ""; // Top tier
     recommendations = [
@@ -340,9 +340,9 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     ];
   } else if (averageScore >= 8.0) {
     tierName = "BREAKING";
-    tierColor = "#2563eb"; // Blue
-    tierGradient = "linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)";
-    tierTextColor = "#1e40af";
+    tierColor = "#4338ca"; // Indigo
+    tierGradient = "linear-gradient(135deg, #eef2ff 0%, #ffffff 100%)";
+    tierTextColor = "#4338ca";
     nextTier = "Finals";
     nextThreshold = "9.0";
     recommendations = [
@@ -352,9 +352,9 @@ function History({ onClose, onSelectSession }: HistoryProps) {
     ];
   } else if (averageScore >= 7.7) {
     tierName = "COMPETITIVE";
-    tierColor = "#ca8a04"; // Gold
-    tierGradient = "linear-gradient(135deg, #fefce8 0%, #ffffff 100%)";
-    tierTextColor = "#854d0e";
+    tierColor = "#92400e"; // Deep Amber
+    tierGradient = "linear-gradient(135deg, #fffbeb 0%, #ffffff 100%)";
+    tierTextColor = "#92400e";
     nextTier = "Breaking";
     nextThreshold = "8.0";
     recommendations = [
@@ -1069,7 +1069,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   priorityAction: {
     fontSize: '0.85rem',
-    color: '#2563eb',
+    color: '#4338ca', // Indigo
+    fontWeight: 600,
   },
   emptyState: {
     color: '#9ca3af',
@@ -1153,7 +1154,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   roundWarnings: {
     fontSize: '0.75rem',
-    color: '#dc2626',
+    color: '#be123c', // Crimson
     fontWeight: 600,
     marginTop: '6px',
   },

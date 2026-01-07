@@ -74,7 +74,7 @@ function generatePDFContent(
     .overall-score-value {
       font-size: 48px;
       font-weight: 800;
-      color: #ca8a04;
+      color: #92400e; /* Deep Amber */
     }
     .overall-score-label { font-size: 12px; color: #6b7280; letter-spacing: 0.1em; }
     .scores-grid {
@@ -89,33 +89,33 @@ function generatePDFContent(
       background: #f9fafb;
       border-radius: 8px;
     }
-    .score-card-value { font-size: 24px; font-weight: 800; color: #ca8a04; }
+    .score-card-value { font-size: 24px; font-weight: 800; color: #92400e; }
     .score-card-label { font-size: 12px; color: #6b7280; margin-top: 4px; }
     .stats-bar {
       display: flex;
       justify-content: space-around;
       padding: 16px;
-      background: #111827;
+      background: #0f172a; /* Slate 900 */
       color: white;
       border-radius: 8px;
       margin-bottom: 32px;
     }
     .stat-item { text-align: center; }
-    .stat-label { font-size: 10px; color: #9ca3af; letter-spacing: 0.1em; }
+    .stat-label { font-size: 10px; color: #94a3b8; letter-spacing: 0.1em; }
     .stat-value { font-size: 16px; font-weight: 700; }
     .section { margin-bottom: 24px; page-break-inside: avoid; }
     .section-title {
       font-size: 14px;
       font-weight: 800;
-      color: #111827;
+      color: #0f172a;
       margin-bottom: 12px;
       padding-bottom: 8px;
-      border-bottom: 1px solid #e5e7eb;
+      border-bottom: 1px solid #e2e8f0;
     }
     .analysis-item {
       margin-bottom: 16px;
       padding: 12px;
-      background: #f9fafb;
+      background: #f8fafc;
       border-radius: 8px;
     }
     .analysis-header {
@@ -124,28 +124,28 @@ function generatePDFContent(
       align-items: center;
       margin-bottom: 8px;
     }
-    .analysis-title { font-weight: 700; font-size: 14px; }
+    .analysis-title { font-weight: 700; font-size: 14px; color: #1e293b; }
     .analysis-score {
-      background: #111827;
+      background: #1e293b;
       color: white;
       padding: 2px 8px;
       border-radius: 4px;
       font-size: 12px;
       font-weight: 700;
     }
-    .analysis-feedback { font-size: 13px; color: #4b5563; line-height: 1.6; }
+    .analysis-feedback { font-size: 13px; color: #334155; line-height: 1.6; }
     .priority-box {
-      background: #fff1f2;
+      background: #fff8f8;
       border: 1px solid #fecaca;
       border-radius: 12px;
       padding: 20px;
       margin-bottom: 24px;
     }
-    .priority-title { font-size: 16px; font-weight: 700; color: #be123c; margin-bottom: 16px; }
-    .priority-item { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(190, 18, 60, 0.1); }
+    .priority-title { font-size: 16px; font-weight: 700; color: #9f1239; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .priority-item { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(159, 18, 57, 0.1); }
     .priority-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-    .priority-item-title { font-weight: 700; margin-bottom: 8px; }
-    .priority-detail { font-size: 13px; color: #4b5563; margin-bottom: 4px; }
+    .priority-item-title { font-weight: 700; margin-bottom: 8px; color: #0f172a; }
+    .priority-detail { font-size: 13px; color: #334155; margin-bottom: 4px; }
     .strengths-list { list-style: none; }
     .strength-item {
       padding: 8px 12px;
@@ -153,25 +153,26 @@ function generatePDFContent(
       border-radius: 6px;
       margin-bottom: 8px;
       font-size: 13px;
-      color: #166534;
+      color: #064e3b;
+      border: 1px solid #d1fae5;
     }
-    .strength-item:before { content: "✓ "; color: #22c55e; font-weight: bold; }
+    .strength-item:before { content: "✓ "; color: #10b981; font-weight: bold; }
     .drill-box {
-      background: #f0f9ff;
-      border: 1px solid #bae6fd;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
       border-radius: 12px;
       padding: 20px;
       margin-bottom: 24px;
     }
-    .drill-title { font-size: 16px; font-weight: 700; color: #0369a1; margin-bottom: 12px; }
-    .drill-text { font-size: 14px; color: #0c4a6e; line-height: 1.6; }
+    .drill-title { font-size: 16px; font-weight: 700; color: #4338ca; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .drill-text { font-size: 14px; color: #1e1b4b; line-height: 1.6; }
     .quote-box {
       margin-top: 24px;
       padding: 16px;
       background: #fafafa;
-      border-left: 4px solid #ca8a04;
+      border-left: 4px solid #92400e;
       font-style: italic;
-      color: #4b5563;
+      color: #334155;
     }
     .quote-label { font-style: normal; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
     .footer {
@@ -361,10 +362,10 @@ function generatePDFContent(
 
 // Helper to get color based on score
 function getScoreColor(score: number): string {
-  if (score >= 8) return '#059669'; // Excellent (green)
-  if (score >= 6) return '#fbbf24'; // Good (amber/yellow)
-  if (score >= 4) return '#f97316'; // Fair (orange)
-  return '#dc2626'; // Poor (red)
+  if (score >= 8) return '#059669'; // Excellent (Emerald)
+  if (score >= 6) return '#d97706'; // Good (Amber)
+  if (score >= 4) return '#b45309'; // Fair (Ochre)
+  return '#be123c'; // Poor (Crimson)
 }
 
 // Generate a deterministic hash from session content to prevent duplicates.
@@ -628,6 +629,10 @@ function FeedbackReport({
       return;
     }
     
+    // IMMEDIATELY mark as saved to prevent race conditions (React 18 Strict Mode runs effects twice)
+    savedRef.current = true;
+    sessionStorage.setItem(saveKey, 'true');
+    
     // Don't save mock data
     if (isMock) {
       console.log('📝 Skipping save - mock data');
@@ -650,6 +655,9 @@ function FeedbackReport({
         
         if (!user) {
            console.error('No user found, cannot save session');
+           // Reset flags so it can try again if user logs in
+           savedRef.current = false;
+           sessionStorage.removeItem(saveKey);
            return;
         }
 
@@ -668,8 +676,6 @@ function FeedbackReport({
             console.warn('⚠️ Duplicate-check lookup failed, will attempt insert:', existingError.message);
           } else if (existing) {
             console.log('📝 Skipping save - session already exists in DB (video_filename match)');
-            savedRef.current = true;
-            sessionStorage.setItem(saveKey, 'true');
             return;
           }
         }
@@ -701,10 +707,12 @@ function FeedbackReport({
             full_analysis_json: JSON.stringify(analysis),
         });
 
-        if (error) throw error;
+        if (error) {
+          // If insert failed (e.g., duplicate), don't reset flags
+          console.error('❌ Failed to save session:', error);
+          return;
+        }
 
-        savedRef.current = true;
-        sessionStorage.setItem(saveKey, 'true');
         console.log('✅ Session saved to Supabase');
       } catch (error) {
         console.error('❌ Failed to save session:', error);
@@ -1514,7 +1522,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: '40px',
   },
   priorityBox: {
-    background: '#fff1f2',
+    background: '#fff8f8',
     border: '1px solid #fecaca',
     borderRadius: '16px',
     padding: '32px',
@@ -1522,54 +1530,62 @@ const styles: Record<string, React.CSSProperties> = {
   priorityBoxTitle: {
     fontSize: '1.2rem',
     fontWeight: 700,
-    color: '#be123c',
+    color: '#9f1239', // Deep Rose
     marginBottom: '24px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
   priorityItem: {
     marginBottom: '24px',
     paddingBottom: '24px',
-    borderBottom: '1px solid rgba(190, 18, 60, 0.1)',
+    borderBottom: '1px solid rgba(159, 18, 57, 0.1)',
   },
   priorityItemTitle: {
     fontSize: '1rem',
     fontWeight: 800,
     marginBottom: '12px',
+    color: '#111827',
   },
   priorityDetail: {
     fontSize: '0.9rem',
     lineHeight: 1.5,
     marginBottom: '8px',
+    color: '#374151',
   },
   boldLabel: {
     fontWeight: 700,
+    color: '#111827',
   },
   drillBox: {
-    background: '#f0f9ff',
-    border: '1px solid #bae6fd',
+    background: '#f8fafc', // Very light slate
+    border: '1px solid #e2e8f0',
     borderRadius: '16px',
     padding: '32px',
   },
   drillBoxTitle: {
     fontSize: '1.2rem',
     fontWeight: 700,
-    color: '#0369a1',
+    color: '#4338ca', // Indigo
     marginBottom: '16px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
   drillText: {
     fontSize: '0.95rem',
     lineHeight: 1.6,
-    color: '#0c4a6e',
+    color: '#1e1b4b', // Deep Indigo
     marginBottom: '24px',
   },
   nextFocus: {
-    borderTop: '1px solid rgba(3, 105, 161, 0.1)',
+    borderTop: '1px solid rgba(67, 56, 202, 0.1)',
     paddingTop: '16px',
     fontSize: '0.9rem',
     fontWeight: 700,
-    color: '#0369a1',
+    color: '#4338ca',
   },
   nextFocusLabel: {
     fontWeight: 800,
+    color: '#1e1b4b',
   },
   strengthsSection: {
     marginTop: '0',
@@ -1580,7 +1596,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '12px',
   },
   strengthItem: {
-    background: '#f0fdf4',
+    background: '#f0fdf4', // Emerald tint
     padding: '12px 16px',
     borderRadius: '8px',
     fontSize: '0.95rem',
@@ -1588,10 +1604,11 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '12px',
     fontWeight: 600,
-    color: '#166534',
+    color: '#064e3b', // Deep Emerald
+    border: '1px solid #d1fae5',
   },
   checkmark: {
-    color: '#22c55e',
+    color: '#10b981', // Emerald
     fontWeight: 900,
   },
   footerActions: {
