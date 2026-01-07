@@ -182,11 +182,16 @@ function Login({ initialView = 'sign_in', onBack }: LoginProps) {
         </button>
       )}
       <div style={styles.header}>
-        <h1 style={styles.title}>Speech Practice</h1>
+        <p style={styles.brandName}>Speech Practice</p>
+        <h1 style={styles.title}>
+          {view === 'sign_up' ? 'Create Account' : 
+           view === 'forgot_password' ? 'Reset Password' : 
+           'Welcome Back'}
+        </h1>
         <p style={styles.subtitle}>
-          {view === 'sign_up' ? 'Create a new account' : 
-           view === 'forgot_password' ? 'Reset your password' : 
-           'Sign in to track your progress'}
+          {view === 'sign_up' ? 'Sign up to track your progress and save your sessions' : 
+           view === 'forgot_password' ? 'Enter your email to receive a reset link' : 
+           'Sign in to continue practicing'}
         </p>
       </div>
 
@@ -384,16 +389,24 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '40px',
     textAlign: 'center',
   },
+  brandName: {
+    color: '#999999',
+    fontSize: '0.9rem',
+    fontWeight: 500,
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
+    margin: '0 0 8px 0',
+  },
   title: {
     color: '#111111',
-    fontSize: '2.5rem',
+    fontSize: '2.2rem',
     margin: '0 0 12px 0',
     fontWeight: 700,
     letterSpacing: '-0.02em',
   },
   subtitle: {
     color: '#666666',
-    fontSize: '1.1rem',
+    fontSize: '1rem',
     margin: 0,
   },
   formContainer: {

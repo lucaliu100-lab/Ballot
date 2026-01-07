@@ -289,13 +289,9 @@ function StartScreen({ onRoundStart, onShowHistory }: StartScreenProps) {
             </div>
         </div>
 
-        {/* Performance History */}
+        {/* Last Session */}
         {lastSession && (
           <div style={styles.historySection}>
-            <div style={styles.historyHeader}>
-                <h3 style={styles.historyTitle}>Performance History</h3>
-                <span style={styles.historySub}>Track Your Progress to Tournament Ready</span>
-            </div>
             <div style={styles.sessionCard} onClick={onShowHistory}>
               <div style={styles.sessionLeft}>
                 <div style={styles.sessionTheme}>{lastSession.theme}</div>
@@ -503,28 +499,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '16px',
   },
 
-  // History Section
+  // Last Session Section
   historySection: {
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
-    gap: '16px',
-  },
-  historyHeader: {
-    display: 'flex',
-    flexDirection: 'column', // Stacked for subtext
-    gap: '4px',
-  },
-  historyTitle: {
-    fontSize: '16px',
-    fontWeight: 800,
-    color: '#111827',
-    margin: 0,
-  },
-  historySub: {
-    fontSize: '13px',
-    color: '#6b7280',
-    fontWeight: 500,
   },
   sessionCard: {
     display: 'flex',
