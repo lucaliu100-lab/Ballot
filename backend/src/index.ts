@@ -792,10 +792,19 @@ app.post('/api/process-all', async (req, res) => {
   }
 
   try {
+    const safeTheme = typeof theme === 'string' && theme.trim() ? theme.trim() : '';
+    const safeQuote = typeof quote === 'string' && quote.trim() ? quote.trim() : '';
+    if (!safeTheme) {
+      console.warn(`⚠️ Missing theme for session ${sessionId}. Frontend should send theme during /api/upload. Using "Unknown".`);
+    }
+    if (!safeQuote) {
+      console.warn(`⚠️ Missing quote for session ${sessionId}. Frontend should send quote during /api/upload. Using "Unknown quote".`);
+    }
+
     const result = await analyzeSpeechWithGemini({
       videoPath,
-      theme: theme || 'General Practice',
-      quote: quote || 'No specific quote',
+      theme: safeTheme || 'Unknown',
+      quote: safeQuote || 'Unknown quote',
       durationSecondsHint: sessionData.durationSecondsHint,
     });
 

@@ -503,8 +503,10 @@ function App() {
       case 'record':
         // Show the recording screen with remaining prep time for extended countdown
         // Recording duration is format-specific + any remaining prep time
+        if (!roundData) return null;
         return (
           <RecordScreen
+            theme={roundData.theme}
             selectedQuote={selectedQuote}
             remainingPrepTime={remainingPrepTime}
             baseDuration={SPEECH_FORMATS[speechFormat].recordDuration}

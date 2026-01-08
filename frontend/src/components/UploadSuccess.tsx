@@ -69,8 +69,8 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady }: Upload
         const controller = new AbortController();
         abortRef.current = controller;
 
-        // Championship-grade timeout (5 minutes) to handle 7-minute competitive speeches
-        const timeoutId = window.setTimeout(() => controller.abort(), 300_000);
+        // Extended timeout (15 minutes) to handle concurrent uploads and longer speeches
+        const timeoutId = window.setTimeout(() => controller.abort(), 900_000);
 
         const response = await fetch(API_ENDPOINTS.processAll, {
           method: 'POST',

@@ -36,6 +36,7 @@ const RECORDER_BITS = {
 
 // Props that this component receives from its parent
 interface RecordScreenProps {
+  theme: string;                                // Theme of the round (sent to backend for scoring context)
   selectedQuote: string;                        // The quote to display during recording
   remainingPrepTime?: number;                   // Remaining prep time in seconds (added to base duration)
   baseDuration?: number;                        // Base recording duration (format-specific)
@@ -43,6 +44,7 @@ interface RecordScreenProps {
 }
 
 function RecordScreen({ 
+  theme,
   selectedQuote, 
   remainingPrepTime = 0,
   baseDuration = DEFAULT_RECORDING_DURATION,
@@ -410,6 +412,9 @@ function RecordScreen({
       formData.append('file', recordedBlob, 'recording.webm');
       // Provide duration hint to backend for robustness (some WebM containers lack duration metadata).
       formData.append('durationSeconds', String(recordingDuration));
+      // Provide round context so the backend doesn't fall back to a default theme.
+      formData.append('theme', theme);
+      formData.append('quote', selectedQuote);
 
       // Send to our backend
       const response = await fetch(API_ENDPOINTS.upload, {
