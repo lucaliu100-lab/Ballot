@@ -32,12 +32,27 @@ export interface VideoAnalysisResponse {
   isMock?: boolean;
 }
 
+/**
+ * Camera framing metadata for body language assessment eligibility.
+ * All three must be true for body language to be assessable.
+ */
+export interface FramingData {
+  headVisible: boolean;
+  torsoVisible: boolean;
+  handsVisible: boolean;
+}
+
 // Structured feedback from Gemini (Competitive NSDA Standard)
 export interface DebateAnalysis {
   /** Speech classification from heuristic and/or model analysis */
   classification?: 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
   /** Whether score caps were applied due to classification */
   capsApplied?: boolean;
+  /** 
+   * Whether body language can be assessed based on camera framing.
+   * If false, bodyLanguage scores are null and weights are renormalized.
+   */
+  bodyLanguageAssessable: boolean;
   overallScore: number;
   performanceTier: string;
   tournamentReady: boolean;
@@ -45,7 +60,7 @@ export interface DebateAnalysis {
     content: { score: number; weight: number; weighted: number };
     delivery: { score: number; weight: number; weighted: number };
     language: { score: number; weight: number; weighted: number };
-    bodyLanguage: { score: number; weight: number; weighted: number };
+    bodyLanguage: { score: number | null; weight: number; weighted: number | null };
   };
   contentAnalysis: {
     topicAdherence: { score: number; feedback: string };
@@ -73,10 +88,10 @@ export interface DebateAnalysis {
     logicalAppeal: { score: number; feedback: string };
   };
   bodyLanguageAnalysis: {
-    eyeContact: { score: number; percentage: number; feedback: string };
-    gestures: { score: number; feedback: string };
-    posture: { score: number; feedback: string };
-    stagePresence: { score: number; feedback: string };
+    eyeContact: { score: number | null; percentage: number | null; feedback: string };
+    gestures: { score: number | null; feedback: string };
+    posture: { score: number | null; feedback: string };
+    stagePresence: { score: number | null; feedback: string };
   };
   speechStats: {
     duration: string;

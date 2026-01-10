@@ -20,6 +20,109 @@ import { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { DebateAnalysis } from '../types';
 
+// Parse feedback into structured 4 sections for PDF
+function parseFeedbackForPDF(feedback: string): {
+  justification: string;
+  evidence: string[];
+  meaning: string;
+  improvement: string;
+  hasMissingSections: boolean;
+} {
+  const result = {
+    justification: '',
+    evidence: [] as string[],
+    meaning: '',
+    improvement: '',
+    hasMissingSections: false,
+  };
+
+  if (!feedback) {
+    result.hasMissingSections = true;
+    return result;
+  }
+
+  // Normalize escaped newlines
+  const text = feedback.replace(/\\n/g, '\n').replace(/\*\*/g, '');
+
+  // Extract Score Justification
+  const justMatch = text.match(/Score Justification:?\s*([\s\S]*?)(?=Evidence|What This|How to|$)/i);
+  if (justMatch) result.justification = justMatch[1].trim();
+
+  // Extract Evidence bullets
+  const evidenceMatch = text.match(/Evidence(?:\s+from\s+Speech)?:?\s*([\s\S]*?)(?=What This|How to|$)/i);
+  if (evidenceMatch) {
+    result.evidence = evidenceMatch[1]
+      .split('\n')
+      .map(l => l.replace(/^[-*•]\s*/, '').trim())
+      .filter(l => l.length > 10);
+  }
+
+  // Extract What This Means
+  const meaningMatch = text.match(/What This Means:?\s*([\s\S]*?)(?=How to|$)/i);
+  if (meaningMatch) result.meaning = meaningMatch[1].trim();
+
+  // Extract How to Improve
+  const improveMatch = text.match(/How to Improve:?\s*([\s\S]*?)$/i);
+  if (improveMatch) result.improvement = improveMatch[1].trim();
+
+  // Check if any section is missing
+  result.hasMissingSections = !result.justification || result.evidence.length < 1 || !result.improvement;
+
+  // Fallback: if no structured sections, use whole text as justification
+  if (!result.justification && !result.evidence.length && !result.meaning && !result.improvement) {
+    result.justification = text.trim();
+  }
+
+  return result;
+}
+
+// Format a single analysis item for PDF with structured sections
+function formatAnalysisItemForPDF(title: string, score: number | null, feedback: string, notAssessable: boolean = false): string {
+  const formatScore = (s: number | null) => s !== null ? s.toFixed(1) : 'N/A';
+  const parsed = parseFeedbackForPDF(feedback);
+  
+  const scoreStyle = notAssessable ? 'background: #9ca3af;' : '';
+  const warningLine = parsed.hasMissingSections 
+    ? '<div style="color: #b45309; font-size: 11px; margin-top: 4px;">⚠️ Some feedback sections may be incomplete</div>' 
+    : '';
+
+  return `
+    <div class="analysis-item">
+      <div class="analysis-header">
+        <span class="analysis-title">${title}</span>
+        <span class="analysis-score" style="${scoreStyle}">${formatScore(score)}</span>
+      </div>
+      ${warningLine}
+      ${parsed.justification ? `
+        <div class="feedback-section">
+          <div class="feedback-label">JUSTIFICATION</div>
+          <p class="feedback-text">${parsed.justification}</p>
+        </div>
+      ` : ''}
+      ${parsed.evidence.length > 0 ? `
+        <div class="feedback-section">
+          <div class="feedback-label">EVIDENCE</div>
+          <ul class="evidence-list">
+            ${parsed.evidence.map(e => `<li>${e}</li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
+      ${parsed.meaning ? `
+        <div class="feedback-section">
+          <div class="feedback-label">COMPETITIVE IMPACT</div>
+          <p class="feedback-text" style="font-style: italic;">${parsed.meaning}</p>
+        </div>
+      ` : ''}
+      ${parsed.improvement ? `
+        <div class="feedback-section">
+          <div class="feedback-label">HOW TO IMPROVE</div>
+          <p class="feedback-text">${parsed.improvement}</p>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
 // PDF Export function - generates a printable version and triggers print dialog
 function generatePDFContent(
   analysis: DebateAnalysis,
@@ -27,7 +130,8 @@ function generatePDFContent(
   quote: string,
   statsInfo: { duration: string; words: number; wpm: number; fillers: number }
 ): string {
-  const formatScore = (score: number) => score.toFixed(1);
+  const formatScore = (score: number | null) => score !== null ? score.toFixed(1) : 'N/A';
+  const isBodyLanguageAssessable = analysis.bodyLanguageAssessable !== false;
   
   return `
 <!DOCTYPE html>
@@ -134,6 +238,12 @@ function generatePDFContent(
       font-weight: 700;
     }
     .analysis-feedback { font-size: 13px; color: #334155; line-height: 1.6; }
+    .feedback-section { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5e7eb; }
+    .feedback-section:first-of-type { border-top: none; padding-top: 0; }
+    .feedback-label { font-size: 10px; font-weight: 700; color: #6b7280; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .feedback-text { font-size: 12px; color: #334155; line-height: 1.5; margin: 0; }
+    .evidence-list { margin: 0; padding-left: 16px; font-size: 12px; color: #475569; }
+    .evidence-list li { margin-bottom: 4px; line-height: 1.4; }
     .priority-box {
       background: #fff8f8;
       border: 1px solid #fecaca;
@@ -207,19 +317,19 @@ function generatePDFContent(
   <div class="scores-grid">
     <div class="score-card">
       <div class="score-card-value">${formatScore(analysis.categoryScores.content.score)}</div>
-      <div class="score-card-label">Content (40%)</div>
+      <div class="score-card-label">Content (${isBodyLanguageAssessable ? '40%' : '47%'})</div>
     </div>
     <div class="score-card">
       <div class="score-card-value">${formatScore(analysis.categoryScores.delivery.score)}</div>
-      <div class="score-card-label">Delivery (30%)</div>
+      <div class="score-card-label">Delivery (${isBodyLanguageAssessable ? '30%' : '35%'})</div>
     </div>
     <div class="score-card">
       <div class="score-card-value">${formatScore(analysis.categoryScores.language.score)}</div>
-      <div class="score-card-label">Language (15%)</div>
+      <div class="score-card-label">Language (${isBodyLanguageAssessable ? '15%' : '18%'})</div>
     </div>
-    <div class="score-card">
-      <div class="score-card-value">${formatScore(analysis.categoryScores.bodyLanguage.score)}</div>
-      <div class="score-card-label">Body Language (15%)</div>
+    <div class="score-card" ${!isBodyLanguageAssessable ? 'style="opacity: 0.5;"' : ''}>
+      <div class="score-card-value" ${!isBodyLanguageAssessable ? 'style="color: #9ca3af;"' : ''}>${isBodyLanguageAssessable ? formatScore(analysis.categoryScores.bodyLanguage.score) : 'N/A'}</div>
+      <div class="score-card-label">${isBodyLanguageAssessable ? 'Body Language (15%)' : 'Body Language (Not Assessable)'}</div>
     </div>
   </div>
 
@@ -244,81 +354,36 @@ function generatePDFContent(
 
   <div class="section">
     <h2 class="section-title">| Content Analysis (40%)</h2>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Topic Adherence</span>
-        <span class="analysis-score">${formatScore(analysis.contentAnalysis.topicAdherence.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.contentAnalysis.topicAdherence.feedback.replace(/\*\*/g, '')}</p>
-    </div>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Argument Structure</span>
-        <span class="analysis-score">${formatScore(analysis.contentAnalysis.argumentStructure.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.contentAnalysis.argumentStructure.feedback.replace(/\*\*/g, '')}</p>
-    </div>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Depth of Analysis</span>
-        <span class="analysis-score">${formatScore(analysis.contentAnalysis.depthOfAnalysis.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.contentAnalysis.depthOfAnalysis.feedback.replace(/\*\*/g, '')}</p>
-    </div>
+    ${formatAnalysisItemForPDF('Topic Adherence', analysis.contentAnalysis.topicAdherence.score, analysis.contentAnalysis.topicAdherence.feedback)}
+    ${formatAnalysisItemForPDF('Argument Structure', analysis.contentAnalysis.argumentStructure.score, analysis.contentAnalysis.argumentStructure.feedback)}
+    ${formatAnalysisItemForPDF('Depth of Analysis', analysis.contentAnalysis.depthOfAnalysis.score, analysis.contentAnalysis.depthOfAnalysis.feedback)}
   </div>
 
   <div class="section">
     <h2 class="section-title">| Delivery Analysis (30%)</h2>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Vocal Variety</span>
-        <span class="analysis-score">${formatScore(analysis.deliveryAnalysis.vocalVariety.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.deliveryAnalysis.vocalVariety.feedback.replace(/\*\*/g, '')}</p>
-    </div>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Pacing & Tempo</span>
-        <span class="analysis-score">${formatScore(analysis.deliveryAnalysis.pacing.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.deliveryAnalysis.pacing.feedback.replace(/\*\*/g, '')}</p>
-    </div>
+    ${formatAnalysisItemForPDF('Vocal Variety', analysis.deliveryAnalysis.vocalVariety.score, analysis.deliveryAnalysis.vocalVariety.feedback)}
+    ${formatAnalysisItemForPDF('Pacing & Tempo', analysis.deliveryAnalysis.pacing.score, analysis.deliveryAnalysis.pacing.feedback)}
   </div>
 
   <div class="section">
     <h2 class="section-title">| Language Use (15%)</h2>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Vocabulary Sophistication</span>
-        <span class="analysis-score">${formatScore(analysis.languageAnalysis.vocabulary.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.languageAnalysis.vocabulary.feedback.replace(/\*\*/g, '')}</p>
-    </div>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Rhetorical Devices</span>
-        <span class="analysis-score">${formatScore(analysis.languageAnalysis.rhetoricalDevices.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.languageAnalysis.rhetoricalDevices.feedback.replace(/\*\*/g, '')}</p>
-    </div>
+    ${formatAnalysisItemForPDF('Vocabulary Sophistication', analysis.languageAnalysis.vocabulary.score, analysis.languageAnalysis.vocabulary.feedback)}
+    ${formatAnalysisItemForPDF('Rhetorical Devices', analysis.languageAnalysis.rhetoricalDevices.score, analysis.languageAnalysis.rhetoricalDevices.feedback)}
   </div>
 
-  <div class="section">
-    <h2 class="section-title">| Body Language & Presence (15%)</h2>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Eye Contact</span>
-        <span class="analysis-score">${formatScore(analysis.bodyLanguageAnalysis.eyeContact.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.bodyLanguageAnalysis.eyeContact.feedback.replace(/\*\*/g, '')}</p>
+  <div class="section" ${!isBodyLanguageAssessable ? 'style="opacity: 0.6;"' : ''}>
+    <h2 class="section-title">| Body Language & Presence (${isBodyLanguageAssessable ? '15%' : 'Not Assessable'})</h2>
+    ${!isBodyLanguageAssessable ? `
+    <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+      <strong>⚠️ Not Assessable</strong>
+      <p style="font-size: 13px; color: #92400e; margin: 4px 0 0 0;">
+        Camera framing does not show head + hands + torso. Body language cannot be scored fairly.
+        Weights have been renormalized among Content, Delivery, and Language.
+      </p>
     </div>
-    <div class="analysis-item">
-      <div class="analysis-header">
-        <span class="analysis-title">Gestures & Posture</span>
-        <span class="analysis-score">${formatScore(analysis.bodyLanguageAnalysis.gestures.score)}</span>
-      </div>
-      <p class="analysis-feedback">${analysis.bodyLanguageAnalysis.gestures.feedback.replace(/\*\*/g, '')}</p>
-    </div>
+    ` : ''}
+    ${formatAnalysisItemForPDF('Eye Contact', analysis.bodyLanguageAnalysis.eyeContact.score, analysis.bodyLanguageAnalysis.eyeContact.feedback, !isBodyLanguageAssessable)}
+    ${formatAnalysisItemForPDF('Gestures & Posture', analysis.bodyLanguageAnalysis.gestures.score, analysis.bodyLanguageAnalysis.gestures.feedback, !isBodyLanguageAssessable)}
   </div>
 
   <div class="priority-box">
@@ -499,38 +564,50 @@ function parseFeedback(text: string) {
 
 interface AnalysisItemProps {
   title: string;
-  score: number;
+  score: number | null;
   feedback: string;
   showProgress?: boolean;
   customMetric?: string;
+  /** If true, displays greyed-out "Not Assessable" state */
+  notAssessable?: boolean;
 }
 
-const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetric }: AnalysisItemProps) => {
+const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetric, notAssessable = false }: AnalysisItemProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const parsed = parseFeedback(feedback);
   const hasStructuredDetails =
     parsed.evidence.length > 0 || Boolean(parsed.meaning) || parsed.improvement.length > 0;
   
+  // Handle null/not assessable state
+  const displayScore = score !== null ? score : 0;
+  const isNotAssessable = notAssessable || score === null;
+  
   return (
-    <div style={styles.analysisItem}>
+    <div style={{ ...styles.analysisItem, opacity: isNotAssessable ? 0.6 : 1 }}>
       <div style={styles.analysisHeader}>
         <div style={styles.analysisTitleGroup}>
           <span style={styles.analysisTitle}>{title}</span>
-          <span style={styles.scoreBadge}>{score.toFixed(1)}</span>
-          {customMetric && <span style={styles.customMetricBadge}>{customMetric}</span>}
+          {isNotAssessable ? (
+            <span style={styles.notAssessableBadge}>N/A</span>
+          ) : (
+            <span style={styles.scoreBadge}>{displayScore.toFixed(1)}</span>
+          )}
+          {customMetric && !isNotAssessable && <span style={styles.customMetricBadge}>{customMetric}</span>}
         </div>
         <div style={styles.analysisScore}>
-          {showProgress && (
+          {showProgress && !isNotAssessable && (
             <div style={styles.progressBarBg}>
-              <div style={{ ...styles.progressBarFill, width: `${score * 10}%`, background: getScoreColor(score) }} />
+              <div style={{ ...styles.progressBarFill, width: `${displayScore * 10}%`, background: getScoreColor(displayScore) }} />
             </div>
           )}
-          <button 
-            onClick={() => setIsExpanded(!isExpanded)} 
-            style={styles.expandButton}
-          >
-            {isExpanded ? 'Hide Details ↑' : 'Deep Dive ↓'}
-          </button>
+          {!isNotAssessable && (
+            <button 
+              onClick={() => setIsExpanded(!isExpanded)} 
+              style={styles.expandButton}
+            >
+              {isExpanded ? 'Hide Details ↑' : 'Deep Dive ↓'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -539,7 +616,7 @@ const AnalysisItem = ({ title, score, feedback, showProgress = true, customMetri
           <p style={styles.justificationText}>{parsed.justification}</p>
         )}
         
-        {isExpanded && (
+        {isExpanded && !isNotAssessable && (
           <div style={styles.expandedContent}>
             <div style={styles.divider} />
 
@@ -723,15 +800,17 @@ function FeedbackReport({
   }, [sessionId, analysis, theme, quote, transcript, videoFilename, isMock, readOnly]);
 
   // Helper to render a score circle
-  const renderScoreRing = (score: number, label: string, weight: string) => {
+  const renderScoreRing = (score: number | null, label: string, weight: string, notAssessable: boolean = false) => {
     // Tournament Yellow styling
-    const color = '#ca8a04'; 
+    const color = '#ca8a04';
+    const greyColor = '#9ca3af';
     const radius = 42;
     const circumference = 2 * Math.PI * radius;
-    const offset = circumference - (score / 10) * circumference;
+    const displayScore = score ?? 0;
+    const offset = notAssessable ? circumference : circumference - (displayScore / 10) * circumference;
 
     return (
-      <div style={styles.scoreCard}>
+      <div style={{ ...styles.scoreCard, opacity: notAssessable ? 0.5 : 1 }}>
         <div style={styles.ringContainer}>
           <svg width="160" height="160" viewBox="0 0 100 100">
             <circle
@@ -747,7 +826,7 @@ function FeedbackReport({
               cy="50"
               r={radius}
               fill="none"
-              stroke={color}
+              stroke={notAssessable ? greyColor : color}
               strokeWidth="10"
               strokeDasharray={circumference}
               strokeDashoffset={offset}
@@ -759,15 +838,15 @@ function FeedbackReport({
               x="50"
               y="55"
               textAnchor="middle"
-              style={{ ...styles.ringScore, fill: color }}
+              style={{ ...styles.ringScore, fill: notAssessable ? greyColor : color }}
             >
-              {score.toFixed(1)}
+              {notAssessable ? 'N/A' : displayScore.toFixed(1)}
             </text>
           </svg>
           </div>
         <div style={styles.scoreInfo}>
           <div style={styles.scoreLabelMain}>{label}</div>
-          <div style={styles.scoreWeight}>{weight} weight</div>
+          <div style={styles.scoreWeight}>{notAssessable ? 'Not assessable' : `${weight} weight`}</div>
         </div>
       </div>
     );
@@ -864,10 +943,10 @@ function FeedbackReport({
 
       {/* Score Rings Section */}
       <div style={styles.ringsGrid}>
-        {renderScoreRing(analysis.categoryScores.content.score, 'Content', '40%')}
-        {renderScoreRing(analysis.categoryScores.delivery.score, 'Delivery', '30%')}
-        {renderScoreRing(analysis.categoryScores.language.score, 'Language', '15%')}
-        {renderScoreRing(analysis.categoryScores.bodyLanguage.score, 'Body Language', '15%')}
+        {renderScoreRing(analysis.categoryScores.content.score, 'Content', analysis.bodyLanguageAssessable === false ? '47%' : '40%')}
+        {renderScoreRing(analysis.categoryScores.delivery.score, 'Delivery', analysis.bodyLanguageAssessable === false ? '35%' : '30%')}
+        {renderScoreRing(analysis.categoryScores.language.score, 'Language', analysis.bodyLanguageAssessable === false ? '18%' : '15%')}
+        {renderScoreRing(analysis.categoryScores.bodyLanguage.score, 'Body Language', '15%', analysis.bodyLanguageAssessable === false)}
           </div>
 
       {/* Stats Bar */}
@@ -966,17 +1045,34 @@ function FeedbackReport({
           </div>
 
           {/* BODY LANGUAGE ANALYSIS */}
-          <div style={styles.analysisSectionWithBg}>
-            <h2 style={styles.sectionHeader}>| Body Language & Presence (15%)</h2>
-            <AnalysisItem 
-              title="Eye Contact" 
-              score={analysis.bodyLanguageAnalysis.eyeContact.score} 
-              feedback={analysis.bodyLanguageAnalysis.eyeContact.feedback} 
+          <div style={{ ...styles.analysisSectionWithBg, opacity: analysis.bodyLanguageAssessable === false ? 0.7 : 1 }}>
+            <h2 style={styles.sectionHeader}>
+              | Body Language & Presence ({analysis.bodyLanguageAssessable === false ? '0%' : '15%'})
+            </h2>
+            {analysis.bodyLanguageAssessable === false && (
+              <div style={styles.notAssessableBanner}>
+                <span style={styles.notAssessableIcon}>⚠️</span>
+                <div style={styles.notAssessableContent}>
+                  <strong>Not Assessable</strong>
+                  <p style={styles.notAssessableText}>
+                    Camera framing does not show head + hands + torso. Body language cannot be scored fairly.
+                    <br />
+                    <em>Weights have been renormalized: Content ~47%, Delivery ~35%, Language ~18%.</em>
+                  </p>
+                </div>
+              </div>
+            )}
+            <AnalysisItem
+              title="Eye Contact"
+              score={analysis.bodyLanguageAnalysis.eyeContact.score}
+              feedback={analysis.bodyLanguageAnalysis.eyeContact.feedback}
+              notAssessable={analysis.bodyLanguageAssessable === false}
             />
-            <AnalysisItem 
-              title="Gestures & Posture" 
-              score={analysis.bodyLanguageAnalysis.gestures.score} 
-              feedback={analysis.bodyLanguageAnalysis.gestures.feedback} 
+            <AnalysisItem
+              title="Gestures & Posture"
+              score={analysis.bodyLanguageAnalysis.gestures.score}
+              feedback={analysis.bodyLanguageAnalysis.gestures.feedback}
+              notAssessable={analysis.bodyLanguageAssessable === false}
             />
           </div>
 
@@ -1649,6 +1745,38 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: 'pointer',
     transition: 'all 0.2s ease',
+  },
+  notAssessableBadge: {
+    background: '#9ca3af',
+    color: '#ffffff',
+    padding: '2px 10px',
+    borderRadius: '4px',
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+  },
+  notAssessableBanner: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '12px',
+    padding: '16px',
+    background: '#fef3c7',
+    border: '1px solid #f59e0b',
+    borderRadius: '8px',
+    marginBottom: '16px',
+  },
+  notAssessableIcon: {
+    fontSize: '1.5rem',
+    flexShrink: 0,
+  },
+  notAssessableContent: {
+    flex: 1,
+  },
+  notAssessableText: {
+    fontSize: '0.9rem',
+    color: '#92400e',
+    margin: '4px 0 0 0',
+    lineHeight: 1.5,
   },
 };
 

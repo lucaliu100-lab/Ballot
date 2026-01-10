@@ -6,11 +6,24 @@
  * of classroom concurrency scenarios where initial requests may time out.
  * 
  * When analysis is complete, calls onFeedbackReady to show the report.
+ * 
+ * IMPORTANT: This component is resilient to page refreshes and new tabs.
+ * It reads sessionId/jobId from URL query params if not available in props.
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { UploadResponse, DebateAnalysis, ProcessAllResponse, AnalysisStatusResponse, JobStatus } from '../types';
 import { API_ENDPOINTS, POLLING_CONFIG } from '../lib/constants';
+
+// Dev mode check for verbose logging
+const IS_DEV = import.meta.env.DEV;
+
+// Helper to log only in dev mode
+const devLog = (message: string, ...args: unknown[]) => {
+  if (IS_DEV) {
+    console.log(message, ...args);
+  }
+};
 
 // Props that this component receives from its parent
 interface UploadSuccessProps {
@@ -35,6 +48,8 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   const [progress, setProgress] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showRefreshLater, setShowRefreshLater] = useState(false);
+  const [pollCount, setPollCount] = useState(0); // Track number of polls for debugging
+  const [isInitializing, setIsInitializing] = useState(true); // Show initializing state
 
   // ==========================================
   // REFS - Store values/callbacks to avoid effect re-runs
@@ -57,6 +72,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   const resolvedIds = useMemo(() => {
     // Priority 1: Use props if available
     if (uploadResponse?.sessionId && uploadResponse?.jobId) {
+      devLog(`📋 [ProcessingPage] Using session from props: sessionId=${uploadResponse.sessionId}, jobId=${uploadResponse.jobId}`);
       return { sessionId: uploadResponse.sessionId, jobId: uploadResponse.jobId };
     }
     // Priority 2: Read from URL params (page refresh scenario)
@@ -64,18 +80,46 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
     const sessionId = params.get('sessionId');
     const jobId = params.get('jobId');
     if (sessionId && jobId) {
-      console.log(`📋 [UploadSuccess] Restored session from URL params: sessionId=${sessionId}, jobId=${jobId}`);
+      devLog(`📋 [ProcessingPage] Restored session from URL params: sessionId=${sessionId}, jobId=${jobId}`);
       return { sessionId, jobId };
     }
+    console.warn('⚠️ [ProcessingPage] No sessionId/jobId found in props or URL params');
     return null;
   }, [uploadResponse?.sessionId, uploadResponse?.jobId]);
+
+  // ==========================================
+  // START ELAPSED TIMER IMMEDIATELY ON MOUNT
+  // ==========================================
+  useEffect(() => {
+    devLog('🚀 [ProcessingPage] Component mounted, starting elapsed timer');
+    startTimeRef.current = Date.now();
+    
+    // Start elapsed timer immediately - don't wait for API call
+    elapsedIntervalRef.current = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+      setElapsedTime(elapsed);
+      
+      if (elapsed * 1000 >= POLLING_CONFIG.maxDurationMs) {
+        setShowRefreshLater(true);
+      }
+    }, 1000);
+
+    return () => {
+      if (elapsedIntervalRef.current) {
+        clearInterval(elapsedIntervalRef.current);
+        elapsedIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   // ==========================================
   // PROGRESS SIMULATION
   // ==========================================
   useEffect(() => {
-    if (jobStatus === 'queued') {
-      setProgress(Math.min(20, elapsedTime * 2));
+    if (isInitializing) {
+      setProgress(Math.min(10, elapsedTime * 2));
+    } else if (jobStatus === 'queued') {
+      setProgress(Math.min(20, 10 + elapsedTime));
     } else if (jobStatus === 'processing') {
       const baseProgress = 20;
       const maxProgress = 95;
@@ -85,7 +129,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
       );
       setProgress(Math.floor(baseProgress + progressIncrement));
     }
-  }, [jobStatus, elapsedTime]);
+  }, [jobStatus, elapsedTime, isInitializing]);
 
   // ==========================================
   // MAIN POLLING EFFECT
@@ -93,14 +137,17 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   useEffect(() => {
     // Guard: can't start without session info
     if (!resolvedIds) {
-      console.error('❌ [UploadSuccess] Missing sessionId/jobId - cannot poll for status');
-      setError('Session information is missing. Please start a new round.');
-      setErrorDetails('Could not find sessionId or jobId in props or URL parameters.');
-      onMissingParamsRef.current?.();
+      console.error('❌ [ProcessingPage] Missing sessionId/jobId - cannot poll for status');
+      setError('Session information is missing.');
+      setErrorDetails('Could not find sessionId or jobId in props or URL parameters. This can happen if you navigated directly to this page without uploading a recording.');
+      setIsInitializing(false);
+      // Don't call onMissingParams - let the user see the error and click "Return to Dashboard"
       return;
     }
 
     const { sessionId, jobId } = resolvedIds;
+    
+    devLog(`🌟 [ProcessingPage] Starting polling for sessionId=${sessionId}, jobId=${jobId}`);
     
     // Note: We intentionally DON'T use a "startedRef" to prevent re-runs.
     // React StrictMode runs effects twice, and using a ref causes the second
@@ -112,15 +159,11 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
     let isActive = true;
     const abortController = new AbortController();
 
-    // Helper: Clear all intervals
-    const clearIntervals = () => {
+    // Helper: Clear polling interval only (elapsed timer is managed separately)
+    const clearPollingInterval = () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
-      }
-      if (elapsedIntervalRef.current) {
-        clearInterval(elapsedIntervalRef.current);
-        elapsedIntervalRef.current = null;
       }
     };
 
@@ -128,20 +171,22 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
     const handleComplete = (data: AnalysisStatusResponse) => {
       if (!isActive) return;
       
-      console.log(`✅ [UploadSuccess] Analysis complete for sessionId=${sessionId}`);
-      clearIntervals();
+      devLog(`✅ [ProcessingPage] Analysis complete for sessionId=${sessionId}`);
+      clearPollingInterval();
       setProgress(100);
       
       setTimeout(() => {
         if (!isActive) return;
         
         if (data.analysis) {
+          devLog(`➡️ [ProcessingPage] Transitioning to results...`);
           onFeedbackReadyRef.current(
             data.analysis,
             data.isMock || false,
             data.transcript || ''
           );
         } else {
+          console.error('❌ [ProcessingPage] Analysis completed but no results were returned');
           setError('Analysis completed but no results were returned.');
           setErrorDetails('The server returned a complete status but the analysis data was missing.');
         }
@@ -150,7 +195,8 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
 
     // Helper: Fetch analysis status
     const fetchStatus = async (): Promise<AnalysisStatusResponse | null> => {
-      console.log(`📊 [UploadSuccess] Polling status: sessionId=${sessionId}, jobId=${jobId}`);
+      setPollCount(prev => prev + 1);
+      devLog(`📊 [ProcessingPage] Poll #${pollCount + 1}: sessionId=${sessionId}, jobId=${jobId}`);
       
       const response = await fetch(
         `${API_ENDPOINTS.analysisStatus}?sessionId=${encodeURIComponent(sessionId)}&jobId=${encodeURIComponent(jobId)}`,
@@ -173,10 +219,10 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
         const statusData = await fetchStatus();
         if (!isActive || !statusData) return;
 
-        // Update status
+        // Update status with logging
         setJobStatus(prev => {
           if (prev !== statusData.status) {
-            console.log(`🔄 [UploadSuccess] Status transition: ${prev} → ${statusData.status}`);
+            devLog(`🔄 [ProcessingPage] Status transition: ${prev} → ${statusData.status}`);
           }
           return statusData.status;
         });
@@ -184,23 +230,23 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
         if (statusData.status === 'complete') {
           handleComplete(statusData);
         } else if (statusData.status === 'error') {
-          console.error(`❌ [UploadSuccess] Analysis error: ${statusData.error}`);
-          clearIntervals();
-          setError('Analysis failed. Please try again.');
-          setErrorDetails(statusData.error || 'Unknown error');
+          console.error(`❌ [ProcessingPage] Analysis error: ${statusData.error}`);
+          clearPollingInterval();
+          setError('Analysis failed.');
+          setErrorDetails(statusData.error || 'Unknown error occurred during analysis.');
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
-        console.error('❌ [UploadSuccess] Poll error:', err);
-        // Don't stop polling on transient errors
+        console.error('❌ [ProcessingPage] Poll error:', err);
+        // Don't stop polling on transient errors - just log and continue
+        devLog(`⚠️ [ProcessingPage] Transient poll error, will retry...`);
       }
     };
 
     // Main async flow
     const startPolling = async () => {
       try {
-        console.log(`🌟 [UploadSuccess] Starting analysis for sessionId=${sessionId}, jobId=${jobId}`);
-        startTimeRef.current = Date.now();
+        devLog(`🚀 [ProcessingPage] Initiating analysis check for sessionId=${sessionId}`);
 
         // Step 1: Call /api/process-all to check/start the job
         const response = await fetch(API_ENDPOINTS.processAll, {
@@ -211,6 +257,8 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
         });
 
         if (!isActive) return;
+        
+        setIsInitializing(false);
 
         if (!response.ok) {
           const text = await response.text().catch(() => '');
@@ -218,14 +266,14 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
         }
 
         const data: ProcessAllResponse = await response.json();
-        console.log(`📝 [UploadSuccess] Job status: jobId=${data.jobId}, status=${data.status}, progress=${data.progress}%`);
+        devLog(`📝 [ProcessingPage] Initial job status: jobId=${data.jobId}, status=${data.status}, progress=${data.progress}%`);
         
         if (!isActive) return;
         setJobStatus(data.status);
 
         // Step 2: If already complete, fetch full data and finish
         if (data.status === 'complete') {
-          console.log(`✅ [UploadSuccess] Analysis already complete, fetching full data...`);
+          devLog(`✅ [ProcessingPage] Analysis already complete, fetching full data...`);
           const fullData = await fetchStatus();
           if (isActive && fullData) {
             handleComplete(fullData);
@@ -233,21 +281,11 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
           return;
         }
 
-        // Step 3: Start elapsed time counter
-        elapsedIntervalRef.current = window.setInterval(() => {
-          if (!isActive) return;
-          const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-          setElapsedTime(elapsed);
-          
-          if (elapsed * 1000 >= POLLING_CONFIG.maxDurationMs) {
-            setShowRefreshLater(true);
-          }
-        }, 1000);
-
-        // Step 4: Do immediate poll, then start interval
+        // Step 3: Do immediate poll, then start interval
         await pollOnce();
         
         if (isActive) {
+          devLog(`⏰ [ProcessingPage] Starting polling interval (every ${POLLING_CONFIG.intervalMs}ms)`);
           pollingIntervalRef.current = window.setInterval(pollOnce, POLLING_CONFIG.intervalMs);
         }
 
@@ -255,8 +293,9 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
         if (!isActive) return;
         if (err instanceof Error && err.name === 'AbortError') return;
         
-        console.error(`❌ [UploadSuccess] Failed to start analysis:`, err);
-        setError('Failed to start analysis. Please try again.');
+        console.error(`❌ [ProcessingPage] Failed to start analysis:`, err);
+        setIsInitializing(false);
+        setError('Failed to start analysis.');
         setErrorDetails(err instanceof Error ? err.message : 'Unknown error');
       }
     };
@@ -268,9 +307,30 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
     return () => {
       isActive = false;
       abortController.abort();
-      clearIntervals();
+      clearPollingInterval();
+      devLog(`🧹 [ProcessingPage] Cleanup: polling stopped for sessionId=${sessionId}`);
     };
   }, [resolvedIds]); // ONLY depends on resolvedIds - no callbacks!
+
+  // ==========================================
+  // RETRY HANDLER
+  // ==========================================
+  const handleRetry = () => {
+    devLog('🔄 [ProcessingPage] Retry requested, reloading page...');
+    window.location.reload();
+  };
+
+  // ==========================================
+  // GO TO DASHBOARD HANDLER
+  // ==========================================
+  const handleGoToDashboard = () => {
+    devLog('🏠 [ProcessingPage] Navigating to dashboard...');
+    if (onMissingParamsRef.current) {
+      onMissingParamsRef.current();
+    } else {
+      window.location.href = '/dashboard';
+    }
+  };
 
   // ==========================================
   // HELPERS
@@ -284,6 +344,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   const getStatusMessage = (): string => {
     if (error) return 'Error occurred';
     if (showRefreshLater) return 'Still processing...';
+    if (isInitializing) return 'Connecting to server...';
     switch (jobStatus) {
       case 'queued': return 'Waiting to start...';
       case 'processing': return `Analyzing: ${Math.floor(progress)}%`;
@@ -294,6 +355,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   };
 
   const getStepDescription = (): string => {
+    if (isInitializing) return 'Establishing connection with the analysis server...';
     switch (jobStatus) {
       case 'queued': return 'Your recording has been received. Preparing to analyze your speech...';
       case 'processing': return 'Analyzing your argument structure, delivery, and presentation...';
@@ -305,6 +367,40 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
   // ==========================================
   // RENDER
   // ==========================================
+  
+  // If missing session params, show error with dashboard button
+  if (!resolvedIds && !isInitializing) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.inner}>
+          <div style={styles.header}>
+            <h1 style={styles.title}>Session Not Found</h1>
+            <p style={styles.subtitle}>
+              We couldn't find the analysis session you're looking for.
+            </p>
+          </div>
+          
+          <div style={styles.mainContent}>
+            <div style={styles.errorBox}>
+              <p style={styles.errorText}>{error || 'Session information is missing.'}</p>
+              {errorDetails && (
+                <details style={styles.errorDetails}>
+                  <summary style={styles.errorDetailsSummary}>Technical details</summary>
+                  <pre style={styles.errorDetailsPre}>{errorDetails}</pre>
+                </details>
+              )}
+              <div style={styles.errorActions}>
+                <button onClick={handleGoToDashboard} style={styles.primaryButton}>
+                  Return to Dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
   return (
     <div style={styles.container}>
       <div style={styles.inner}>
@@ -321,7 +417,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
             <div style={styles.progressBar}>
               <div style={{ ...styles.progressFill, width: `${progress}%` }} />
             </div>
-            {!error && !showRefreshLater && (
+            {!error && (
               <p style={styles.elapsedText}>Elapsed: {formatElapsed(elapsedTime)}</p>
             )}
           </div>
@@ -335,7 +431,7 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
                 your results will be saved automatically.
               </p>
               <div style={styles.refreshLaterActions}>
-                <button onClick={() => window.location.reload()} style={styles.secondaryButton}>
+                <button onClick={handleRetry} style={styles.secondaryButton}>
                   Refresh Page
                 </button>
                 <button onClick={() => { window.location.href = '/history'; }} style={styles.primaryButton}>
@@ -358,14 +454,19 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
                   <pre style={styles.errorDetailsPre}>{errorDetails}</pre>
                 </details>
               )}
-              <button onClick={() => window.location.reload()} style={styles.retryButton}>
-                Restart
-              </button>
+              <div style={styles.errorActions}>
+                <button onClick={handleRetry} style={styles.retryButton}>
+                  Try Again
+                </button>
+                <button onClick={handleGoToDashboard} style={styles.secondaryButton}>
+                  Return to Dashboard
+                </button>
+              </div>
             </div>
           )}
 
           {/* Status Indicator */}
-          {!showRefreshLater && (
+          {!showRefreshLater && !error && (
             <div style={styles.stepList}>
               <div style={styles.stepItem}>
                 <div style={jobStatus === 'complete' ? styles.doneIcon : styles.spinner}>
@@ -373,7 +474,8 @@ function UploadSuccess({ uploadResponse, theme, quote, onFeedbackReady, onMissin
                 </div>
                 <div style={styles.stepContent}>
                   <h3 style={styles.stepTitle}>
-                    {jobStatus === 'queued' ? 'Preparing Analysis' :
+                    {isInitializing ? 'Connecting...' :
+                     jobStatus === 'queued' ? 'Preparing Analysis' :
                      jobStatus === 'processing' ? 'Analyzing Speech' :
                      'Evaluation Complete'}
                   </h3>
@@ -505,24 +607,30 @@ const styles: Record<string, React.CSSProperties> = {
   stepTitle: { margin: '0 0 4px 0', fontSize: '1.1rem', fontWeight: 600, color: '#111111' },
   stepDesc: { margin: 0, fontSize: '0.95rem', color: '#666666', lineHeight: 1.5 },
   errorBox: {
-    padding: '20px',
+    padding: '24px',
     background: '#fff5f5',
     border: '1px solid #feb2b2',
     borderRadius: '12px',
     marginBottom: '32px',
   },
-  errorText: { color: '#c53030', margin: '0 0 16px 0', fontSize: '0.95rem' },
+  errorText: { color: '#c53030', margin: '0 0 16px 0', fontSize: '0.95rem', fontWeight: 500 },
+  errorActions: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'flex-start',
+    marginTop: '16px',
+  },
   retryButton: {
     background: '#000000',
     color: '#ffffff',
     border: 'none',
-    padding: '8px 16px',
+    padding: '10px 20px',
     borderRadius: '6px',
     fontSize: '0.9rem',
     fontWeight: 500,
     cursor: 'pointer',
   },
-  errorDetails: { margin: '12px 0 16px 0' },
+  errorDetails: { margin: '12px 0 0 0' },
   errorDetailsSummary: { cursor: 'pointer', color: '#111111', fontSize: '0.85rem', fontWeight: 600 },
   errorDetailsPre: {
     marginTop: '10px',

@@ -11,11 +11,15 @@
  * - Large video preview that takes most of the screen
  * - Start recording button positioned inside the video frame
  * - Button fades when recording starts
+ * - Pre-recording acknowledgement modal for body language framing
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { UploadResponse } from '../types';
+import { UploadResponse, FramingData } from '../types';
 import { API_ENDPOINTS } from '../lib/constants';
+
+// Storage key for acknowledgement persistence (cleared on sign out)
+const ACK_STORAGE_KEY = 'ballot_framing_acknowledged_session';
 
 // Constants
 const DEFAULT_RECORDING_DURATION = 300; // 5 minutes in seconds (fallback)
@@ -33,6 +37,30 @@ const RECORDER_BITS = {
   videoBitsPerSecond: 900_000, // ~0.9 Mbps video
   audioBitsPerSecond: 96_000,  // ~96 kbps audio
 } as const;
+
+// Check if user has acknowledged (persists until sign out)
+function hasAcknowledged(): boolean {
+  try {
+    return sessionStorage.getItem(ACK_STORAGE_KEY) === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+// Save acknowledgement (will be cleared when browser session ends or user signs out)
+function saveAcknowledgement(permanent: boolean): void {
+  try {
+    if (permanent) {
+      // Use sessionStorage - persists until tab/browser closes or sign out clears it
+      sessionStorage.setItem(ACK_STORAGE_KEY, 'true');
+    } else {
+      // Just for this page load
+      sessionStorage.setItem(ACK_STORAGE_KEY, 'true');
+    }
+  } catch (e) {
+    // Ignore storage errors
+  }
+}
 
 // Props that this component receives from its parent
 interface RecordScreenProps {
@@ -70,6 +98,10 @@ function RecordScreen({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
+
+  // Acknowledgement modal state - show immediately on mount if not already acknowledged
+  const [showModal, setShowModal] = useState<boolean>(!hasAcknowledged());
+  const [dontShowAgain, setDontShowAgain] = useState<boolean>(false);
 
   // Total available time (base duration + remaining prep time)
   const totalTime = baseDuration + remainingPrepTime;
@@ -110,6 +142,9 @@ function RecordScreen({
 
   // Reference to the recording duration timer
   const durationRef = useRef<number | null>(null);
+
+  // Reference to modal for focus management
+  const modalRef = useRef<HTMLDivElement>(null);
 
   // Format seconds into MM:SS display (handles negative numbers for grace period)
   const formatTime = useCallback((seconds: number): string => {
@@ -160,18 +195,36 @@ function RecordScreen({
 
   // Cleanup timers on unmount
   useEffect(() => {
-    // React 18 StrictMode runs effects (setup/cleanup) twice in dev.
-    // Ensure we always mark ourselves mounted when the effect runs.
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       stopTimers();
-
-      // Cancel any in-flight upload so it can't complete later and jump the app to processing/report
       uploadAbortRef.current?.abort();
       uploadAbortRef.current = null;
     };
   }, [stopTimers]);
+
+  // Handle keyboard events for modal
+  useEffect(() => {
+    if (!showModal) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAcceptAcknowledgement();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        // Don't allow escape to close - user must acknowledge
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    modalRef.current?.focus();
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showModal, dontShowAgain]);
 
   // Auto-stop recording when countdown reaches -GRACE_PERIOD (end of grace period)
   useEffect(() => {
@@ -184,40 +237,30 @@ function RecordScreen({
   // SETUP: Request camera access on mount
   // ==========================================
   useEffect(() => {
-    // Function to initialize camera and microphone
     const initializeMedia = async () => {
       try {
-        // Request access to camera and microphone
-        // This will prompt the user for permission
         const stream = await navigator.mediaDevices.getUserMedia({
           video: VIDEO_CONSTRAINTS,
           audio: true,
         });
 
-        // CRITICAL: Verify that we actually got an audio track
         const audioTracks = stream.getAudioTracks();
         const videoTracks = stream.getVideoTracks();
         
-        console.log(`🎤 Media stream initialized: ${videoTracks.length} video track(s), ${audioTracks.length} audio track(s)`);
+        console.log(`Media stream initialized: ${videoTracks.length} video, ${audioTracks.length} audio`);
         
         if (audioTracks.length === 0) {
-          // Audio permission denied or no microphone available
           setError(
-            '⚠️ No microphone detected. Your recording will have no audio and cannot be scored. Please check your microphone permissions and device settings, then refresh the page.'
+            'No microphone detected. Your recording will have no audio and cannot be scored. Please check your microphone permissions and refresh the page.'
           );
-        } else {
-          console.log(`✅ Audio track active: ${audioTracks[0].label || 'default'}`);
         }
 
-        // Store the stream reference
         streamRef.current = stream;
 
-        // Connect the stream to the video element for preview
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
       } catch (err) {
-        // Handle errors (user denied permission, no camera, etc.)
         console.error('Failed to access camera/microphone:', err);
         setError(
           'Unable to access camera/microphone. Please allow permissions and try again.'
@@ -227,7 +270,6 @@ function RecordScreen({
 
     initializeMedia();
 
-    // Cleanup: stop all tracks when component unmounts
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -236,101 +278,88 @@ function RecordScreen({
   }, []);
 
   // ==========================================
+  // ACKNOWLEDGEMENT HANDLERS
+  // ==========================================
+
+  const handleAcceptAcknowledgement = useCallback(() => {
+    saveAcknowledgement(dontShowAgain);
+    setShowModal(false);
+  }, [dontShowAgain]);
+
+  // ==========================================
   // RECORDING FUNCTIONS
   // ==========================================
 
-  /**
-   * Start recording video and audio
-   */
   const startRecording = () => {
-    // Make sure we have a stream
     if (!streamRef.current) {
       setError('No media stream available');
       return;
     }
 
-    // CRITICAL: Verify audio tracks exist before recording
     const audioTracks = streamRef.current.getAudioTracks();
     if (audioTracks.length === 0) {
       setError(
-        '❌ Cannot start recording: No microphone detected. Please check your microphone permissions and device settings, then refresh the page.'
+        'Cannot start recording: No microphone detected. Please check your microphone permissions and refresh the page.'
       );
       return;
     }
 
-    // Reset chunks array for new recording
     chunksRef.current = [];
 
-    // Create MediaRecorder with the stream
-    // Try to use webm format with explicit audio codec (opus)
     let mimeType = 'video/webm';
     if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-      mimeType = 'video/webm;codecs=vp9,opus'; // VP9 video + Opus audio
+      mimeType = 'video/webm;codecs=vp9,opus';
     } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-      mimeType = 'video/webm;codecs=vp8,opus'; // VP8 video + Opus audio (wider support)
+      mimeType = 'video/webm;codecs=vp8,opus';
     } else if (MediaRecorder.isTypeSupported('video/webm;codecs=opus')) {
-      mimeType = 'video/webm;codecs=opus'; // Fallback: just ensure opus audio
+      mimeType = 'video/webm;codecs=opus';
     }
     
-    console.log(`🎥 Recording with MIME type: ${mimeType}`);
+    console.log(`Recording with MIME type: ${mimeType}`);
 
     const mediaRecorder = new MediaRecorder(streamRef.current, {
       mimeType,
       ...RECORDER_BITS,
     });
 
-    // Event handler: called when data is available
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         chunksRef.current.push(event.data);
       }
     };
 
-    // Event handler: called when recording stops
     mediaRecorder.onstop = async () => {
-      // Combine all chunks into a single blob
       const blob = new Blob(chunksRef.current, { type: mimeType });
       
-      // CRITICAL: Verify the recorded blob actually has audio before proceeding
       try {
         const arrayBuffer = await blob.arrayBuffer();
         
-        // Check file size - audio+video should be at least ~50KB even for very short recordings
         if (arrayBuffer.byteLength < 50000) {
-          // File is suspiciously small (likely video-only or corrupted)
-          console.error('❌ Recorded file is too small:', (arrayBuffer.byteLength / 1024).toFixed(1), 'KB');
-          setError('⚠️ Recording failed: Audio was not captured. This can happen with certain browsers/devices. Please try: 1) Use Chrome/Edge instead of Safari, 2) Check System Settings → Privacy → Microphone, 3) Refresh page and try again.');
+          console.error('Recorded file is too small:', (arrayBuffer.byteLength / 1024).toFixed(1), 'KB');
+          setError('Recording failed: Audio was not captured. Please try Chrome/Edge, check microphone permissions, and refresh.');
           setRecordingState('idle');
           return;
         }
         
-        console.log(`✅ Recording validated: ${(arrayBuffer.byteLength / 1024).toFixed(1)} KB`);
+        console.log(`Recording validated: ${(arrayBuffer.byteLength / 1024).toFixed(1)} KB`);
       } catch (validationError) {
-        console.error('⚠️ Could not validate recording:', validationError);
-        // Continue anyway - validation is best-effort
+        console.error('Could not validate recording:', validationError);
       }
       
       setRecordedBlob(blob);
-      
-      // Create a URL for preview
       const url = URL.createObjectURL(blob);
       setPreviewUrl(url);
-      
       setRecordingState('stopped');
       stopTimers();
     };
 
-    // Store reference and start recording
     mediaRecorderRef.current = mediaRecorder;
-    mediaRecorder.start(1000); // Collect data every 1 second
+    mediaRecorder.start(1000);
     setRecordingState('recording');
     startCountdown();
     startDurationTimer();
   };
 
-  /**
-   * Stop the current recording
-   */
   const stopRecording = () => {
     if (mediaRecorderRef.current && recordingState === 'recording') {
       mediaRecorderRef.current.stop();
@@ -361,7 +390,6 @@ function RecordScreen({
   const handleLoadedMetadata = () => {
     const video = previewVideoRef.current;
     if (!video) return;
-    // Use recorded duration as fallback if video metadata duration is unreliable
     const metaDuration = video.duration;
     const actualDuration = Number.isFinite(metaDuration) && metaDuration > 0 
       ? metaDuration 
@@ -389,9 +417,6 @@ function RecordScreen({
 
   const progressPercent = videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0;
 
-  /**
-   * Upload the recorded video to the backend
-   */
   const uploadRecording = async () => {
     if (!recordedBlob) {
       setError('No recording to upload');
@@ -402,21 +427,24 @@ function RecordScreen({
     setError(null);
 
     try {
-      // Cancel any previous in-flight upload attempt
       uploadAbortRef.current?.abort();
       const controller = new AbortController();
       uploadAbortRef.current = controller;
 
-      // Create FormData to send the file
       const formData = new FormData();
       formData.append('file', recordedBlob, 'recording.webm');
-      // Provide duration hint to backend for robustness (some WebM containers lack duration metadata).
       formData.append('durationSeconds', String(recordingDuration));
-      // Provide round context so the backend doesn't fall back to a default theme.
       formData.append('theme', theme);
       formData.append('quote', selectedQuote);
+      
+      // Since user acknowledged, send framing as all true for body language assessment
+      const framing: FramingData = {
+        headVisible: true,
+        torsoVisible: true,
+        handsVisible: true,
+      };
+      formData.append('framing', JSON.stringify(framing));
 
-      // Send to our backend
       const response = await fetch(API_ENDPOINTS.upload, {
         method: 'POST',
         body: formData,
@@ -434,7 +462,7 @@ function RecordScreen({
             details = await response.text();
           }
         } catch {
-          // ignore parsing failures; fallback to generic below
+          // ignore
         }
 
         const suffix = details ? `: ${details}` : '';
@@ -442,25 +470,20 @@ function RecordScreen({
       }
 
       const data: UploadResponse = await response.json();
-      console.log('✅ Upload succeeded:', data);
+      console.log('Upload succeeded:', data);
       
-      // Notify parent component of success
       if (isMountedRef.current) {
-        // Defensive: if the parent transition fails for any reason,
-        // don't leave this screen stuck in the "uploading" state.
         setRecordingState('stopped');
-        console.log('➡️ Transitioning to processing screen...');
         try {
           onUploadComplete(data);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          console.error('❌ onUploadComplete threw:', message);
+          console.error('onUploadComplete error:', message);
           setError(`Failed to advance after upload: ${message}`);
           setRecordingState('stopped');
         }
       }
     } catch (err) {
-      // If the request was aborted (e.g., user navigated away), do nothing noisy
       if (err instanceof Error && err.name === 'AbortError') {
         return;
       }
@@ -477,10 +500,48 @@ function RecordScreen({
 
   return (
     <div style={styles.container}>
-      {/* Main video area - takes most of the screen */}
+      {/* Acknowledgement Modal - shown immediately on page load */}
+      {showModal && (
+        <div style={styles.modalOverlay}>
+          <div 
+            ref={modalRef}
+            style={styles.modalContent}
+            tabIndex={-1}
+          >
+            <h2 style={styles.modalTitle}>Camera Position</h2>
+            <p style={styles.modalText}>
+              For accurate body language analysis, please ensure your <strong>face and torso</strong> are 
+              visible, and your <strong>hands are visible</strong> at least periodically during your speech.
+            </p>
+            
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={dontShowAgain}
+                onChange={(e) => setDontShowAgain(e.target.checked)}
+                style={styles.checkbox}
+              />
+              <span>Do not show again</span>
+            </label>
+
+            <button 
+              onClick={handleAcceptAcknowledgement}
+              style={styles.continueButton}
+            >
+              Continue
+            </button>
+            
+            <p style={styles.modalHint}>
+              Press Enter to continue
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Main video area */}
       <div style={styles.videoWrapper}>
         <div style={styles.videoContainer}>
-          {/* Camera preview (shown when not reviewing a recording) */}
+          {/* Camera preview */}
           {!previewUrl && (
             <video
               ref={videoRef}
@@ -488,11 +549,10 @@ function RecordScreen({
               muted
               playsInline
               style={styles.video}
-              className="video-preview"
             />
           )}
           
-          {/* Recording preview (shown after recording stops) */}
+          {/* Recording preview */}
           {previewUrl && (
             <>
               <video
@@ -506,25 +566,14 @@ function RecordScreen({
                 onEnded={handleVideoEnded}
                 onClick={handlePlayPause}
               />
-              {/* Custom video controls overlay */}
               <div style={styles.customControls}>
                 <button onClick={handlePlayPause} style={styles.playPauseBtn}>
                   {isPlaying ? '⏸' : '▶'}
                 </button>
                 <div style={styles.progressContainer} onClick={handleSeek}>
                   <div style={styles.progressTrack}>
-                    <div 
-                      style={{
-                        ...styles.progressFill,
-                        width: `${progressPercent}%`,
-                      }} 
-                    />
-                    <div 
-                      style={{
-                        ...styles.progressThumb,
-                        left: `${progressPercent}%`,
-                      }} 
-                    />
+                    <div style={{ ...styles.progressFill, width: `${progressPercent}%` }} />
+                    <div style={{ ...styles.progressThumb, left: `${progressPercent}%` }} />
                   </div>
                 </div>
                 <span style={styles.timeDisplay}>
@@ -534,20 +583,30 @@ function RecordScreen({
             </>
           )}
 
-          {/* Quote display inside video frame - top center */}
-          <div style={styles.quoteOverlay}>
+          {/* Quote - absolutely centered */}
+          <div style={styles.quoteCentered}>
             <p style={styles.quoteText}>"{selectedQuote}"</p>
           </div>
 
-          {/* Timer overlay - top right */}
-          <div style={styles.timerOverlay}>
-            <div style={{
-              ...styles.timerBox,
-              background: timeRemaining < 0 ? 'rgba(220, 38, 38, 0.9)' : 'rgba(0, 0, 0, 0.7)',
-            }}>
+          {/* Top bar with recording indicator and timer */}
+          <div style={styles.topBar}>
+            {/* Recording indicator - left side */}
+            {recordingState === 'recording' && (
+              <div style={styles.recordingIndicator}>
+                <span style={styles.recordingDot}>●</span>
+                <span style={styles.recLabel}>REC</span>
+                <span style={styles.recordingDuration}>{formatTime(recordingDuration)}</span>
+              </div>
+            )}
+            
+            {/* Spacer to push timer to the right */}
+            <div style={{ flex: 1 }} />
+
+            {/* Timer - right side */}
+            <div style={styles.timerBox}>
               <span style={styles.timerLabel}>
                 {timeRemaining < 0 
-                  ? 'GRACE PERIOD' 
+                  ? 'GRACE' 
                   : recordingState === 'recording' 
                     ? 'TIME LEFT' 
                     : 'AVAILABLE'}
@@ -555,45 +614,27 @@ function RecordScreen({
               <span style={{
                 ...styles.timerValue,
                 color: timeRemaining < 0 
-                  ? '#ffffff'
+                  ? '#ef4444'
                   : timeRemaining < 60 && recordingState === 'recording' 
                     ? '#ef4444' 
                     : '#ffffff',
               }}>
                 {formatTime(timeRemaining)}
               </span>
-              {timeRemaining < 0 && (
-                <span style={styles.graceHint}>Recording will stop automatically</span>
-              )}
             </div>
           </div>
 
-          {/* Recording indicator - top left */}
-          {recordingState === 'recording' && (
-            <div style={styles.recordingIndicator}>
-              <span style={styles.recordingDot}>●</span>
-              <span>REC</span>
-              <span style={styles.recordingDuration}>{formatTime(recordingDuration)}</span>
-            </div>
-          )}
-
-          {/* Start Recording Button - inside video frame, center */}
-          {recordingState === 'idle' && (
-            <button
-              onClick={startRecording}
-              style={styles.startButtonInFrame}
-            >
+          {/* Start Recording Button */}
+          {recordingState === 'idle' && !showModal && (
+            <button onClick={startRecording} style={styles.startButtonInFrame}>
               <span style={styles.startIcon}>●</span>
               Start Recording
             </button>
           )}
 
-          {/* Stop Recording Button - inside video frame, faded appearance */}
+          {/* Stop Recording Button */}
           {recordingState === 'recording' && (
-            <button
-              onClick={stopRecording}
-              style={styles.stopButtonInFrame}
-            >
+            <button onClick={stopRecording} style={styles.stopButtonInFrame}>
               <span style={styles.stopIcon}>■</span>
               Stop Recording
             </button>
@@ -602,18 +643,13 @@ function RecordScreen({
 
         {/* Error message */}
         {error && (
-          <div style={styles.error}>
-            {error}
-          </div>
+          <div style={styles.error}>{error}</div>
         )}
 
-        {/* Post-recording controls - below video */}
+        {/* Post-recording controls */}
         {recordingState === 'stopped' && (
           <div style={styles.postRecordControls}>
-            <button
-              onClick={uploadRecording}
-              style={styles.uploadButton}
-            >
+            <button onClick={uploadRecording} style={styles.uploadButton}>
               Upload Recording
             </button>
           </div>
@@ -632,7 +668,7 @@ function RecordScreen({
   );
 }
 
-// Styles for this component
+// Styles
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
@@ -654,7 +690,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '12px',
     overflow: 'hidden',
     background: '#000',
-    border: '2px solid rgba(255, 255, 255, 0.1)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -662,43 +698,104 @@ const styles: Record<string, React.CSSProperties> = {
   video: {
     width: '100%',
     height: '100%',
-    objectFit: 'contain', // Show full frame with gaps on sides
+    objectFit: 'contain',
     display: 'block',
   },
-  quoteOverlay: {
-    position: 'absolute',
-    top: '20px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    background: 'rgba(0, 0, 0, 0.7)',
-    backdropFilter: 'blur(10px)',
-    borderRadius: '12px',
-    padding: '12px 24px',
-    maxWidth: '80%',
-    textAlign: 'center',
-  },
-  quoteText: {
-    color: 'rgba(255, 255, 255, 0.9)',
-    fontSize: '0.95rem',
-    margin: 0,
-    fontStyle: 'italic',
-    lineHeight: 1.5,
-  },
-  // Preview video after recording
   previewVideo: {
     width: '100%',
     height: '100%',
-    objectFit: 'contain', // Show full frame with gaps on sides
+    objectFit: 'contain',
     display: 'block',
     background: '#000',
     cursor: 'pointer',
   },
+  // Top bar containing recording indicator and timer
+  topBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    padding: '16px 20px',
+    gap: '16px',
+    zIndex: 2,
+  },
+  recordingIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    background: 'rgba(220, 38, 38, 0.9)',
+    padding: '8px 16px',
+    borderRadius: '8px',
+    flexShrink: 0,
+  },
+  recordingDot: {
+    color: '#ffffff',
+    fontSize: '1rem',
+    animation: 'blink 1s infinite',
+  },
+  recLabel: {
+    color: '#ffffff',
+    fontSize: '0.85rem',
+    fontWeight: 600,
+  },
+  recordingDuration: {
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+  },
+  quoteCentered: {
+    position: 'absolute',
+    top: '16px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 1,
+    pointerEvents: 'none',
+    display: 'flex',
+    justifyContent: 'center',
+  },
+  quoteText: {
+    color: 'rgba(255, 255, 255, 0.95)',
+    fontSize: '0.95rem',
+    margin: 0,
+    fontStyle: 'italic',
+    lineHeight: 1.5,
+    textAlign: 'center',
+    padding: '12px 20px',
+    background: 'rgba(0, 0, 0, 0.75)',
+    borderRadius: '12px',
+    maxWidth: '70vw',
+  },
+  timerBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    background: 'rgba(0, 0, 0, 0.6)',
+    padding: '8px 16px',
+    borderRadius: '8px',
+    flexShrink: 0,
+  },
+  timerLabel: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: '0.65rem',
+    fontWeight: 600,
+    letterSpacing: '0.5px',
+  },
+  timerValue: {
+    color: '#ffffff',
+    fontSize: '1.4rem',
+    fontWeight: 700,
+    fontFamily: 'monospace',
+  },
   // Custom video controls
   customControls: {
     position: 'absolute',
-    bottom: '0',
-    left: '0',
-    right: '0',
+    bottom: 0,
+    left: 0,
+    right: 0,
     background: 'linear-gradient(transparent, rgba(0,0,0,0.8))',
     padding: '20px 16px 16px 16px',
     display: 'flex',
@@ -735,7 +832,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   progressFill: {
     height: '100%',
-    background: '#10b981',
+    background: '#ffffff',
     borderRadius: '3px',
     transition: 'width 0.1s linear',
   },
@@ -757,117 +854,61 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'right',
     flexShrink: 0,
   },
-  timerOverlay: {
-    position: 'absolute',
-    top: '20px',
-    right: '20px',
-  },
-  timerBox: {
-    background: 'rgba(0, 0, 0, 0.7)',
-    backdropFilter: 'blur(10px)',
-    borderRadius: '12px',
-    padding: '12px 20px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  timerLabel: {
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    letterSpacing: '1px',
-    marginBottom: '4px',
-  },
-  timerValue: {
-    color: '#ffffff',
-    fontSize: '1.8rem',
-    fontWeight: 700,
-    fontFamily: 'monospace',
-  },
-  graceHint: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: '0.65rem',
-    fontWeight: 500,
-    marginTop: '4px',
-    textAlign: 'center',
-  },
-  recordingIndicator: {
-    position: 'absolute',
-    top: '20px',
-    left: '20px',
-    background: 'rgba(220, 38, 38, 0.9)',
-    backdropFilter: 'blur(10px)',
-    color: '#ffffff',
-    padding: '10px 20px',
-    borderRadius: '12px',
-    fontSize: '0.9rem',
-    fontWeight: 600,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-  },
-  recordingDot: {
-    animation: 'blink 1s infinite',
-    fontSize: '1.2rem',
-  },
-  recordingDuration: {
-    fontFamily: 'monospace',
-    fontSize: '0.9rem',
-  },
-  // Start button - solid white, positioned inside video frame at bottom center
+  // Start button
   startButtonInFrame: {
     position: 'absolute',
     bottom: '40px',
     left: '50%',
     transform: 'translateX(-50%)',
-    background: 'rgba(255, 255, 255, 0.95)',
+    background: '#ffffff',
     color: '#111111',
     border: 'none',
-    padding: '18px 40px',
-    fontSize: '1.1rem',
+    padding: '16px 36px',
+    fontSize: '1rem',
     fontWeight: 600,
     borderRadius: '50px',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
+    gap: '10px',
     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
     transition: 'all 0.2s ease',
   },
   startIcon: {
     color: '#dc2626',
-    fontSize: '1.4rem',
+    fontSize: '1.2rem',
   },
-  // Stop button - faded appearance when recording
+  // Stop button
   stopButtonInFrame: {
     position: 'absolute',
     bottom: '40px',
     left: '50%',
     transform: 'translateX(-50%)',
-    background: 'rgba(255, 255, 255, 0.3)',
+    background: 'rgba(255, 255, 255, 0.15)',
     color: '#ffffff',
-    border: '2px solid rgba(255, 255, 255, 0.4)',
-    padding: '18px 40px',
-    fontSize: '1.1rem',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
+    padding: '16px 36px',
+    fontSize: '1rem',
     fontWeight: 600,
     borderRadius: '50px',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
+    gap: '10px',
     backdropFilter: 'blur(10px)',
     transition: 'all 0.2s ease',
   },
   stopIcon: {
-    fontSize: '1rem',
+    fontSize: '0.9rem',
   },
   error: {
-    padding: '16px 20px',
+    padding: '14px 18px',
     background: 'rgba(220, 38, 38, 0.1)',
-    border: '1px solid #dc2626',
+    border: '1px solid rgba(220, 38, 38, 0.3)',
     borderRadius: '8px',
     color: '#ef4444',
     marginTop: '16px',
+    fontSize: '0.9rem',
   },
   postRecordControls: {
     display: 'flex',
@@ -877,13 +918,13 @@ const styles: Record<string, React.CSSProperties> = {
     paddingBottom: '20px',
   },
   uploadButton: {
-    background: '#10b981',
-    color: '#ffffff',
+    background: '#ffffff',
+    color: '#111111',
     border: 'none',
-    padding: '16px 40px',
-    fontSize: '1.1rem',
+    padding: '14px 36px',
+    fontSize: '1rem',
     fontWeight: 600,
-    borderRadius: '50px',
+    borderRadius: '8px',
     cursor: 'pointer',
     transition: 'all 0.2s ease',
   },
@@ -891,11 +932,80 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'rgba(255, 255, 255, 0.1)',
     color: 'rgba(255, 255, 255, 0.5)',
     border: 'none',
-    padding: '16px 40px',
-    fontSize: '1.1rem',
+    padding: '14px 36px',
+    fontSize: '1rem',
     fontWeight: 600,
-    borderRadius: '50px',
+    borderRadius: '8px',
     cursor: 'not-allowed',
+  },
+  // Modal styles - clean white/black/gray theme
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0, 0, 0, 0.9)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    padding: '20px',
+  },
+  modalContent: {
+    background: '#ffffff',
+    borderRadius: '12px',
+    padding: '32px 40px',
+    maxWidth: '440px',
+    width: '100%',
+    textAlign: 'center',
+    outline: 'none',
+  },
+  modalTitle: {
+    color: '#111111',
+    fontSize: '1.25rem',
+    fontWeight: 600,
+    margin: '0 0 16px 0',
+  },
+  modalText: {
+    color: '#4b5563',
+    fontSize: '0.95rem',
+    lineHeight: 1.6,
+    margin: '0 0 24px 0',
+  },
+  checkboxLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    color: '#6b7280',
+    fontSize: '0.9rem',
+    cursor: 'pointer',
+    marginBottom: '24px',
+  },
+  checkbox: {
+    width: '16px',
+    height: '16px',
+    cursor: 'pointer',
+    accentColor: '#111111',
+  },
+  continueButton: {
+    background: '#111111',
+    color: '#ffffff',
+    border: 'none',
+    padding: '12px 32px',
+    fontSize: '0.95rem',
+    fontWeight: 500,
+    borderRadius: '8px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    width: '100%',
+    marginBottom: '16px',
+  },
+  modalHint: {
+    color: '#9ca3af',
+    fontSize: '0.8rem',
+    margin: 0,
   },
 };
 

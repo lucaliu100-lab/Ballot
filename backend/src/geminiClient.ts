@@ -108,6 +108,16 @@ function getModel(): string {
 // TYPES
 // ===========================================
 
+/**
+ * Camera framing metadata for body language assessment eligibility.
+ * All three must be true for body language to be assessable.
+ */
+export interface FramingData {
+  headVisible: boolean;
+  torsoVisible: boolean;
+  handsVisible: boolean;
+}
+
 export interface GeminiAnalysisInput {
   videoPath: string;
   theme: string;
@@ -117,6 +127,11 @@ export interface GeminiAnalysisInput {
    * Used only as a fallback when ffprobe cannot determine duration from the container metadata.
    */
   durationSecondsHint?: number;
+  /**
+   * Camera framing info for body language assessment eligibility.
+   * If not provided or incomplete, body language defaults to NOT assessable.
+   */
+  framing?: FramingData;
 }
 
 export interface GeminiAnalysisResult {
@@ -125,6 +140,8 @@ export interface GeminiAnalysisResult {
   analysis?: {
     classification: 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
     capsApplied: boolean;
+    /** Whether body language can be assessed based on camera framing */
+    bodyLanguageAssessable: boolean;
     overallScore: number;
     performanceTier: string;
     tournamentReady: boolean;
@@ -132,7 +149,7 @@ export interface GeminiAnalysisResult {
       content: { score: number; weight: number; weighted: number };
       delivery: { score: number; weight: number; weighted: number };
       language: { score: number; weight: number; weighted: number };
-      bodyLanguage: { score: number; weight: number; weighted: number };
+      bodyLanguage: { score: number | null; weight: number; weighted: number | null };
     };
     contentAnalysis: {
       topicAdherence: { score: number; feedback: string };
@@ -160,10 +177,10 @@ export interface GeminiAnalysisResult {
       logicalAppeal: { score: number; feedback: string };
     };
     bodyLanguageAnalysis: {
-      eyeContact: { score: number; percentage: number; feedback: string };
-      gestures: { score: number; feedback: string };
-      posture: { score: number; feedback: string };
-      stagePresence: { score: number; feedback: string };
+      eyeContact: { score: number | null; percentage: number | null; feedback: string };
+      gestures: { score: number | null; feedback: string };
+      posture: { score: number | null; feedback: string };
+      stagePresence: { score: number | null; feedback: string };
     };
     speechStats: {
       duration: string;
@@ -560,22 +577,116 @@ function computeCategoryScoresFromSubscoresInPlace(analysis: any): void {
   analysis.overallScore = clamp(round1(cs.content.weighted + cs.delivery.weighted + cs.language.weighted + cs.bodyLanguage.weighted), 0, 10);
 }
 
-function enforceTournamentReadinessInPlace(analysis: any, durationSeconds: number, fillerPerMinute: number, eyeContactPct?: number): void {
+function enforceTournamentReadinessInPlace(analysis: any, durationSeconds: number, fillerPerMinute: number, eyeContactPct?: number, bodyLanguageAssessable: boolean = true): void {
   if (!analysis || typeof analysis !== 'object') return;
   const overall = typeof analysis.overallScore === 'number' ? analysis.overallScore : 0;
   const cs = analysis.categoryScores || {};
-  const minCat = Math.min(
-    cs.content?.score ?? 0,
-    cs.delivery?.score ?? 0,
-    cs.language?.score ?? 0,
-    cs.bodyLanguage?.score ?? 0
-  );
+  
+  // For tournament readiness, only consider body language if it's assessable
+  const minCat = bodyLanguageAssessable
+    ? Math.min(
+        cs.content?.score ?? 0,
+        cs.delivery?.score ?? 0,
+        cs.language?.score ?? 0,
+        cs.bodyLanguage?.score ?? 0
+      )
+    : Math.min(
+        cs.content?.score ?? 0,
+        cs.delivery?.score ?? 0,
+        cs.language?.score ?? 0
+      );
   const durOk = durationSeconds >= 240 && durationSeconds <= 420; // 4:00-7:00
   const fillersOk = Number.isFinite(fillerPerMinute) ? fillerPerMinute < 8 : true;
-  const eyeOk = typeof eyeContactPct === 'number' ? eyeContactPct > 50 : true;
+  // If body language is not assessable, skip eye contact check
+  const eyeOk = !bodyLanguageAssessable || (typeof eyeContactPct === 'number' ? eyeContactPct > 50 : true);
 
   analysis.tournamentReady = Boolean(overall >= 7.5 && minCat >= 7.0 && durOk && fillersOk && eyeOk);
   analysis.performanceTier = computePerformanceTier(overall);
+}
+
+// ==============================
+// Body Language Assessability (camera framing check)
+// ==============================
+
+const NOT_ASSESSABLE_FEEDBACK = 'Not assessable due to camera framing. Please record with head + hands + torso visible.';
+
+/**
+ * Determine if body language can be assessed based on camera framing.
+ * All three (head, torso, hands) must be explicitly marked visible.
+ */
+function isBodyLanguageAssessable(framing?: FramingData): boolean {
+  if (!framing) return false;
+  return framing.headVisible === true && framing.torsoVisible === true && framing.handsVisible === true;
+}
+
+/**
+ * Apply body language not-assessable state to analysis.
+ * Sets all body language scores to null and renormalizes weights.
+ */
+function applyBodyLanguageNotAssessableInPlace(analysis: any): void {
+  if (!analysis || typeof analysis !== 'object') return;
+
+  analysis.bodyLanguageAssessable = false;
+
+  // Set all body language analysis scores to null with standard feedback
+  if (analysis.bodyLanguageAnalysis) {
+    analysis.bodyLanguageAnalysis.eyeContact = {
+      score: null,
+      percentage: null,
+      feedback: NOT_ASSESSABLE_FEEDBACK,
+    };
+    analysis.bodyLanguageAnalysis.gestures = {
+      score: null,
+      feedback: NOT_ASSESSABLE_FEEDBACK,
+    };
+    analysis.bodyLanguageAnalysis.posture = {
+      score: null,
+      feedback: NOT_ASSESSABLE_FEEDBACK,
+    };
+    analysis.bodyLanguageAnalysis.stagePresence = {
+      score: null,
+      feedback: NOT_ASSESSABLE_FEEDBACK,
+    };
+  }
+
+  // Set category score to null
+  if (analysis.categoryScores?.bodyLanguage) {
+    analysis.categoryScores.bodyLanguage.score = null;
+    analysis.categoryScores.bodyLanguage.weighted = null;
+  }
+
+  // Renormalize weights: redistribute body language's 15% among remaining categories
+  // Original: Content 40%, Delivery 30%, Language 15%, Body 15%
+  // New: Content ~47.06%, Delivery ~35.29%, Language ~17.65% (sum = 100%)
+  // Simplified: Content 0.47, Delivery 0.35, Language 0.18
+  const cs = analysis.categoryScores;
+  if (cs) {
+    const contentScore = cs.content?.score ?? 0;
+    const deliveryScore = cs.delivery?.score ?? 0;
+    const languageScore = cs.language?.score ?? 0;
+
+    // Renormalize weights (0.40 + 0.30 + 0.15 = 0.85, scale to 1.0)
+    const scaleFactor = 1 / 0.85;
+    const newContentWeight = round1(0.40 * scaleFactor * 100) / 100; // ~0.47
+    const newDeliveryWeight = round1(0.30 * scaleFactor * 100) / 100; // ~0.35
+    const newLanguageWeight = round1(0.15 * scaleFactor * 100) / 100; // ~0.18
+
+    cs.content.weight = newContentWeight;
+    cs.content.weighted = round1(contentScore * newContentWeight);
+    
+    cs.delivery.weight = newDeliveryWeight;
+    cs.delivery.weighted = round1(deliveryScore * newDeliveryWeight);
+    
+    cs.language.weight = newLanguageWeight;
+    cs.language.weighted = round1(languageScore * newLanguageWeight);
+    
+    cs.bodyLanguage.weight = 0;
+    cs.bodyLanguage.weighted = null;
+
+    // Recompute overall score from renormalized weights
+    const newOverall = cs.content.weighted + cs.delivery.weighted + cs.language.weighted;
+    analysis.overallScore = clamp(round1(newOverall), 0, 10);
+  }
 }
 
 // ==============================
@@ -935,6 +1046,346 @@ function formatDurationSeconds(seconds: number): string {
 function countWords(text: string): number {
   const words = text.trim().split(/\s+/).filter(Boolean);
   return words.length;
+}
+
+// ===========================================
+// FEEDBACK VALIDATOR (Evidence Quality Check)
+// ===========================================
+
+interface FeedbackValidationResult {
+  isValid: boolean;
+  warnings: string[];
+  fieldWarnings: Map<string, string[]>;
+}
+
+interface FeedbackFieldCheck {
+  fieldName: string;
+  feedback: string;
+}
+
+/**
+ * Extract quoted text from a feedback string.
+ * Looks for text in single quotes (e.g., 'exact quote here')
+ */
+function extractQuotesFromFeedback(feedback: string): string[] {
+  const quotes: string[] = [];
+  // Match text between single quotes (5-80 chars, no newlines in the quote)
+  const quotePattern = /'([^'\n]{5,80})'/g;
+  let match;
+  while ((match = quotePattern.exec(feedback)) !== null) {
+    const quote = match[1].trim();
+    // Skip if it looks like a time reference or placeholder
+    if (!/^\[\d+:\d{2}/.test(quote) && !/^no (?:direct )?quote/i.test(quote)) {
+      quotes.push(quote);
+    }
+  }
+  return quotes;
+}
+
+/**
+ * Count evidence bullet points in feedback.
+ * Evidence bullets should be lines starting with - that contain quoted text or time ranges.
+ */
+function countEvidenceBullets(feedback: string): number {
+  const lines = feedback.split('\n');
+  let count = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Evidence bullet: starts with - and contains either a quote (single quotes) or time pattern [m:ss]
+    if (trimmed.startsWith('-') || trimmed.startsWith('•') || trimmed.startsWith('*')) {
+      // Check if it looks like an evidence bullet (has quote or time reference)
+      if (/'[^']+'/i.test(trimmed) || /\[\d+:\d{2}/i.test(trimmed) || /\[no timecode/i.test(trimmed)) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Check if a quote appears (approximately) in the transcript.
+ * Uses fuzzy matching: 70% of words must match in sequence.
+ */
+function quoteExistsInTranscript(quote: string, transcript: string): boolean {
+  if (!quote || !transcript) return false;
+  
+  const normalizedQuote = quote.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+  const normalizedTranscript = transcript.toLowerCase().replace(/[^\w\s]/g, ' ');
+  
+  // Direct substring match
+  if (normalizedTranscript.includes(normalizedQuote)) {
+    return true;
+  }
+  
+  // Fuzzy match: check if 70% of consecutive words appear in transcript
+  const quoteWords = normalizedQuote.split(/\s+/).filter(Boolean);
+  if (quoteWords.length < 3) return true; // Too short to validate meaningfully
+  
+  // Sliding window check
+  const transcriptWords = normalizedTranscript.split(/\s+/).filter(Boolean);
+  const windowSize = quoteWords.length;
+  const matchThreshold = Math.floor(quoteWords.length * 0.7);
+  
+  for (let i = 0; i <= transcriptWords.length - windowSize; i++) {
+    let matchCount = 0;
+    for (let j = 0; j < windowSize; j++) {
+      if (transcriptWords[i + j] === quoteWords[j]) {
+        matchCount++;
+      }
+    }
+    if (matchCount >= matchThreshold) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Check for required feedback sections (all 4 must be present).
+ */
+function checkFeedbackSections(feedback: string): { hasAll: boolean; missing: string[] } {
+  const requiredSections = [
+    { name: 'Score Justification', patterns: [/\*\*Score Justification/i, /Score Justification:/i] },
+    { name: 'Evidence from Speech', patterns: [/\*\*Evidence/i, /Evidence from Speech:/i, /Evidence:/i] },
+    { name: 'What This Means', patterns: [/\*\*What This Means/i, /What This Means:/i, /Competitive Implication/i] },
+    { name: 'How to Improve', patterns: [/\*\*How to Improve/i, /How to Improve:/i, /Improvement/i] },
+  ];
+  
+  const missing: string[] = [];
+  for (const section of requiredSections) {
+    const found = section.patterns.some(p => p.test(feedback));
+    if (!found) {
+      missing.push(section.name);
+    }
+  }
+  
+  return { hasAll: missing.length === 0, missing };
+}
+
+/**
+ * Validate a single feedback field for quality requirements.
+ */
+function validateFeedbackField(fieldName: string, feedback: string, transcript: string): string[] {
+  const warnings: string[] = [];
+  
+  if (!feedback || feedback.trim().length < 50) {
+    warnings.push(`${fieldName}: Feedback is too short (< 50 chars)`);
+    return warnings;
+  }
+  
+  // Check for required sections
+  const sectionCheck = checkFeedbackSections(feedback);
+  if (!sectionCheck.hasAll) {
+    warnings.push(`${fieldName}: Missing sections: ${sectionCheck.missing.join(', ')}`);
+  }
+  
+  // Count evidence bullets
+  const bulletCount = countEvidenceBullets(feedback);
+  if (bulletCount < 2) {
+    warnings.push(`${fieldName}: Found ${bulletCount} evidence bullet(s), expected 2`);
+  }
+  
+  // Verify quotes exist in transcript
+  const quotes = extractQuotesFromFeedback(feedback);
+  for (const quote of quotes) {
+    if (!quoteExistsInTranscript(quote, transcript)) {
+      // Only warn if the quote is substantial and not a placeholder
+      if (quote.length > 15 && !/no (?:direct )?quote|not available|n\/a/i.test(quote)) {
+        warnings.push(`${fieldName}: Quote not found in transcript: "${quote.substring(0, 30)}..."`);
+      }
+    }
+  }
+  
+  // Check for character limit
+  if (feedback.length > 900) {
+    warnings.push(`${fieldName}: Feedback exceeds 900 char limit (${feedback.length} chars)`);
+  }
+  
+  return warnings;
+}
+
+/**
+ * Validate all feedback fields in an analysis object.
+ * Returns validation result with per-field warnings.
+ */
+function validateAnalysisFeedback(analysis: any, transcript: string): FeedbackValidationResult {
+  const warnings: string[] = [];
+  const fieldWarnings = new Map<string, string[]>();
+  
+  if (!analysis || typeof analysis !== 'object') {
+    return { isValid: false, warnings: ['Analysis object is missing or invalid'], fieldWarnings };
+  }
+  
+  // Collect all feedback fields to validate
+  const feedbackFields: FeedbackFieldCheck[] = [];
+  
+  // Content analysis fields
+  if (analysis.contentAnalysis) {
+    const ca = analysis.contentAnalysis;
+    if (ca.topicAdherence?.feedback) feedbackFields.push({ fieldName: 'topicAdherence', feedback: ca.topicAdherence.feedback });
+    if (ca.argumentStructure?.feedback) feedbackFields.push({ fieldName: 'argumentStructure', feedback: ca.argumentStructure.feedback });
+    if (ca.depthOfAnalysis?.feedback) feedbackFields.push({ fieldName: 'depthOfAnalysis', feedback: ca.depthOfAnalysis.feedback });
+    if (ca.examplesEvidence?.feedback) feedbackFields.push({ fieldName: 'examplesEvidence', feedback: ca.examplesEvidence.feedback });
+    if (ca.timeManagement?.feedback) feedbackFields.push({ fieldName: 'timeManagement', feedback: ca.timeManagement.feedback });
+  }
+  
+  // Delivery analysis fields
+  if (analysis.deliveryAnalysis) {
+    const da = analysis.deliveryAnalysis;
+    if (da.vocalVariety?.feedback) feedbackFields.push({ fieldName: 'vocalVariety', feedback: da.vocalVariety.feedback });
+    if (da.pacing?.feedback) feedbackFields.push({ fieldName: 'pacing', feedback: da.pacing.feedback });
+    if (da.articulation?.feedback) feedbackFields.push({ fieldName: 'articulation', feedback: da.articulation.feedback });
+    if (da.fillerWords?.feedback) feedbackFields.push({ fieldName: 'fillerWords', feedback: da.fillerWords.feedback });
+  }
+  
+  // Language analysis fields
+  if (analysis.languageAnalysis) {
+    const la = analysis.languageAnalysis;
+    if (la.vocabulary?.feedback) feedbackFields.push({ fieldName: 'vocabulary', feedback: la.vocabulary.feedback });
+    if (la.rhetoricalDevices?.feedback) feedbackFields.push({ fieldName: 'rhetoricalDevices', feedback: la.rhetoricalDevices.feedback });
+    if (la.emotionalAppeal?.feedback) feedbackFields.push({ fieldName: 'emotionalAppeal', feedback: la.emotionalAppeal.feedback });
+    if (la.logicalAppeal?.feedback) feedbackFields.push({ fieldName: 'logicalAppeal', feedback: la.logicalAppeal.feedback });
+  }
+  
+  // Body language analysis fields (only if assessable)
+  if (analysis.bodyLanguageAssessable !== false && analysis.bodyLanguageAnalysis) {
+    const bla = analysis.bodyLanguageAnalysis;
+    if (bla.eyeContact?.feedback) feedbackFields.push({ fieldName: 'eyeContact', feedback: bla.eyeContact.feedback });
+    if (bla.gestures?.feedback) feedbackFields.push({ fieldName: 'gestures', feedback: bla.gestures.feedback });
+    if (bla.posture?.feedback) feedbackFields.push({ fieldName: 'posture', feedback: bla.posture.feedback });
+    if (bla.stagePresence?.feedback) feedbackFields.push({ fieldName: 'stagePresence', feedback: bla.stagePresence.feedback });
+  }
+  
+  // Validate each field
+  let totalWarnings = 0;
+  for (const field of feedbackFields) {
+    const fieldProblems = validateFeedbackField(field.fieldName, field.feedback, transcript);
+    if (fieldProblems.length > 0) {
+      fieldWarnings.set(field.fieldName, fieldProblems);
+      warnings.push(...fieldProblems);
+      totalWarnings += fieldProblems.length;
+    }
+  }
+  
+  // Check for phrase reuse (10+ word phrases appearing in multiple fields)
+  const phraseReuse = detectPhraseReuse(feedbackFields);
+  if (phraseReuse.length > 0) {
+    warnings.push(...phraseReuse);
+  }
+  
+  // Validation passes if <30% of fields have major issues (missing sections or no evidence)
+  const majorIssueThreshold = Math.floor(feedbackFields.length * 0.3);
+  const majorIssues = Array.from(fieldWarnings.values()).filter(w => 
+    w.some(msg => msg.includes('Missing sections') || msg.includes('evidence bullet'))
+  ).length;
+  
+  return {
+    isValid: majorIssues <= majorIssueThreshold,
+    warnings,
+    fieldWarnings,
+  };
+}
+
+/**
+ * Detect 10+ word phrases reused across different feedback fields.
+ */
+function detectPhraseReuse(fields: FeedbackFieldCheck[]): string[] {
+  const warnings: string[] = [];
+  const minPhraseLength = 10;
+  
+  // Extract all phrases of 10+ words from each field
+  const fieldPhrases = new Map<string, Set<string>>();
+  
+  for (const field of fields) {
+    const words = field.feedback.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
+    const phrases = new Set<string>();
+    
+    // Generate all 10-word consecutive sequences
+    for (let i = 0; i <= words.length - minPhraseLength; i++) {
+      const phrase = words.slice(i, i + minPhraseLength).join(' ');
+      phrases.add(phrase);
+    }
+    
+    fieldPhrases.set(field.fieldName, phrases);
+  }
+  
+  // Check for reuse across fields
+  const fieldNames = Array.from(fieldPhrases.keys());
+  const reportedPhrases = new Set<string>();
+  
+  for (let i = 0; i < fieldNames.length; i++) {
+    for (let j = i + 1; j < fieldNames.length; j++) {
+      const phrasesA = fieldPhrases.get(fieldNames[i])!;
+      const phrasesB = fieldPhrases.get(fieldNames[j])!;
+      
+      for (const phrase of phrasesA) {
+        if (phrasesB.has(phrase) && !reportedPhrases.has(phrase)) {
+          reportedPhrases.add(phrase);
+          warnings.push(`Phrase reuse detected between ${fieldNames[i]} and ${fieldNames[j]}: "${phrase.substring(0, 40)}..."`);
+          break; // Only report first reuse per field pair
+        }
+      }
+    }
+  }
+  
+  return warnings;
+}
+
+/**
+ * Truncate feedback strings to max 900 chars while preserving structure.
+ */
+function truncateFeedbackInPlace(analysis: any, maxChars: number = 900): void {
+  if (!analysis || typeof analysis !== 'object') return;
+  
+  const truncate = (obj: any, key: string) => {
+    if (obj?.[key]?.feedback && typeof obj[key].feedback === 'string') {
+      if (obj[key].feedback.length > maxChars) {
+        // Try to truncate at a sentence boundary
+        let truncated = obj[key].feedback.substring(0, maxChars);
+        const lastPeriod = truncated.lastIndexOf('.');
+        if (lastPeriod > maxChars * 0.7) {
+          truncated = truncated.substring(0, lastPeriod + 1);
+        } else {
+          truncated = truncated.substring(0, maxChars - 3) + '...';
+        }
+        obj[key].feedback = truncated;
+      }
+    }
+  };
+  
+  // Content
+  if (analysis.contentAnalysis) {
+    truncate(analysis.contentAnalysis, 'topicAdherence');
+    truncate(analysis.contentAnalysis, 'argumentStructure');
+    truncate(analysis.contentAnalysis, 'depthOfAnalysis');
+    truncate(analysis.contentAnalysis, 'examplesEvidence');
+    truncate(analysis.contentAnalysis, 'timeManagement');
+  }
+  
+  // Delivery
+  if (analysis.deliveryAnalysis) {
+    truncate(analysis.deliveryAnalysis, 'vocalVariety');
+    truncate(analysis.deliveryAnalysis, 'pacing');
+    truncate(analysis.deliveryAnalysis, 'articulation');
+    truncate(analysis.deliveryAnalysis, 'fillerWords');
+  }
+  
+  // Language
+  if (analysis.languageAnalysis) {
+    truncate(analysis.languageAnalysis, 'vocabulary');
+    truncate(analysis.languageAnalysis, 'rhetoricalDevices');
+    truncate(analysis.languageAnalysis, 'emotionalAppeal');
+    truncate(analysis.languageAnalysis, 'logicalAppeal');
+  }
+  
+  // Body Language
+  if (analysis.bodyLanguageAnalysis) {
+    truncate(analysis.bodyLanguageAnalysis, 'eyeContact');
+    truncate(analysis.bodyLanguageAnalysis, 'gestures');
+    truncate(analysis.bodyLanguageAnalysis, 'posture');
+    truncate(analysis.bodyLanguageAnalysis, 'stagePresence');
+  }
 }
 
 function estimateWavDurationSecondsFromBytes(bytes: number): number {
@@ -1379,6 +1830,7 @@ function buildInsufficientSpeechAnalysis(durationSeconds: number, reason: string
   return {
     classification: 'too_short',
     capsApplied: true,
+    bodyLanguageAssessable: true, // Default to true for insufficient speech (not a framing issue)
     overallScore: 1.0,
     performanceTier: 'Developing',
     tournamentReady: false,
@@ -2197,24 +2649,33 @@ SCORING PROCEDURE (FOLLOW THIS ORDER)
 ANTI-HALLUCINATION: Use ONLY quotes and time ranges from the transcript above. Do NOT invent content.
 
 ═══════════════════════════════════════════════════════════════════════════════
-FEEDBACK FORMAT REQUIREMENTS
+FEEDBACK FORMAT REQUIREMENTS (CRITICAL - INDIVIDUALIZED FEEDBACK)
 ═══════════════════════════════════════════════════════════════════════════════
-Every "feedback" field MUST contain exactly 4 sections with EXACTLY 2 evidence bullets:
+Every "feedback" field MUST contain EXACTLY 4 labeled sections. This structure is NON-NEGOTIABLE.
 
-**Score Justification:** Why this score, not higher/lower. Reference competitive standard.
-**Evidence from Speech:**
-- 'exact quote from transcript' [m:ss-m:ss] — why it matters
-- 'exact quote from transcript' [m:ss-m:ss] — why it matters
-**What This Means:** Competitive implications (2 sentences max).
-**How to Improve:**
-1. Specific drill
-2. Technique to implement
-3. Measurable goal
+**Score Justification:** (3-5 sentences REQUIRED)
+Write a "because-chain" of reasoning. Start with the score decision, then explain WHY using 2-3 "because" connections.
+Example pattern: "This earns a 7.3 because [observation]. This matters because [competitive impact]. The speaker demonstrates [specific skill] because [evidence]."
+MUST end with ONE sentence: "This did not reach [X.X] because [specific gap that prevented higher band]."
 
-CONSTRAINTS:
-- Each feedback string: MAX 700 characters total
-- Do NOT reuse any 10+ word phrase across different feedback fields
-- Use single quotes for transcript quotes inside JSON strings
+**Evidence from Speech:** (EXACTLY 2 bullets REQUIRED)
+- '[exact 5-15 word quote from transcript]' [m:ss-m:ss] — [why this quote demonstrates the score]
+- '[exact 5-15 word quote from transcript]' [m:ss-m:ss] — [why this quote demonstrates the score]
+CRITICAL: Quotes MUST be verbatim substrings from the transcript. If transcript lacks timecodes, write "[no timecode available]" - do NOT invent timestamps.
+
+**What This Means:** (2 sentences MAX)
+Competitive tournament implication. What would judges notice? How does this affect ranking?
+
+**How to Improve:** (Actionable drill + measurable goal)
+One specific practice drill with a MEASURABLE target. Format: "[Drill name]: [Exact steps]. Goal: [Quantifiable metric to hit by next session]."
+Example: "Pause Mapping Drill: Record yourself, mark 3 intentional 1.5-second pauses at transitions. Goal: Achieve 3 deliberate pauses per minute within 2 sessions."
+
+STRICT CONSTRAINTS:
+- Each feedback string: MAX 900 characters total (truncate if over)
+- Do NOT reuse any 10+ word phrase across different feedback fields (uniqueness required)
+- Use single quotes for transcript quotes inside JSON strings (double quotes break JSON)
+- Evidence quotes MUST actually appear in the transcript - if you cannot find a direct quote, say "No direct quote available" rather than fabricating
+- Vary sentence structure across fields - avoid templated/repetitive phrasing
 
 ═══════════════════════════════════════════════════════════════════════════════
 JSON OUTPUT RULES
@@ -2296,29 +2757,29 @@ JSON OUTPUT RULES
     "bodyLanguage": {"score": <number>, "weight": 0.15, "weighted": <number>}
   },
   "contentAnalysis": {
-    "topicAdherence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "argumentStructure": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "depthOfAnalysis": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "examplesEvidence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "timeManagement": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+    "topicAdherence": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "argumentStructure": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "depthOfAnalysis": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "examplesEvidence": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "timeManagement": {"score": <number>, "feedback": <4-section feedback string max 900 chars>}
   },
   "deliveryAnalysis": {
-    "vocalVariety": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "pacing": {"score": <number>, "wpm": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "articulation": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "fillerWords": {"score": <number>, "total": <number>, "perMinute": <number>, "breakdown": <object>, "feedback": <detailed feedback string max 700 chars>}
+    "vocalVariety": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "pacing": {"score": <number>, "wpm": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "articulation": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "fillerWords": {"score": <number>, "total": <number>, "perMinute": <number>, "breakdown": <object>, "feedback": <4-section feedback string max 900 chars>}
   },
   "languageAnalysis": {
-    "vocabulary": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "rhetoricalDevices": {"score": <number>, "examples": <array of strings>, "feedback": <detailed feedback string max 700 chars>},
-    "emotionalAppeal": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "logicalAppeal": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+    "vocabulary": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "rhetoricalDevices": {"score": <number>, "examples": <array of strings>, "feedback": <4-section feedback string max 900 chars>},
+    "emotionalAppeal": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "logicalAppeal": {"score": <number>, "feedback": <4-section feedback string max 900 chars>}
   },
   "bodyLanguageAnalysis": {
-    "eyeContact": {"score": <number>, "percentage": <number 0-100>, "feedback": <detailed feedback string max 700 chars>},
-    "gestures": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "posture": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
-    "stagePresence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+    "eyeContact": {"score": <number>, "percentage": <number 0-100>, "feedback": <4-section feedback string max 900 chars>},
+    "gestures": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "posture": {"score": <number>, "feedback": <4-section feedback string max 900 chars>},
+    "stagePresence": {"score": <number>, "feedback": <4-section feedback string max 900 chars>}
   },
   "speechStats": {
     "duration": <string like "4:32">,
@@ -2447,8 +2908,20 @@ JSON OUTPUT RULES
 
     // Apply rubric length penalties and enforce rubric-derived tournament readiness + tier.
     applyLengthPenaltiesInPlace(analysis, durationSecondsActual);
-    // Ensure category scores are consistent with the detailed sub-scores (prevents “subscores high but category low” mismatches).
-    computeCategoryScoresFromSubscoresInPlace(analysis);
+    
+    // Determine body language assessability from framing data
+    const bodyLanguageAssessable = isBodyLanguageAssessable(input.framing);
+    analysis.bodyLanguageAssessable = bodyLanguageAssessable;
+    console.log(`   📷 Body language assessable: ${bodyLanguageAssessable} (framing: ${JSON.stringify(input.framing || {})})`);
+
+    if (bodyLanguageAssessable) {
+      // Normal path: compute category scores including body language
+      computeCategoryScoresFromSubscoresInPlace(analysis);
+    } else {
+      // Body language not assessable: null out scores and renormalize weights
+      applyBodyLanguageNotAssessableInPlace(analysis);
+      console.log('   ⚠️ Body language set to NOT assessable - weights renormalized');
+    }
 
     // Apply any short-length penalty as an overall deduction (category wheels remain pure averages).
     const overallLenDeduction = Number((analysis as any).__rubric?.overallLengthDeduction || 0);
@@ -2461,7 +2934,8 @@ JSON OUTPUT RULES
       analysis,
       durationSecondsActual,
       fillerPerMinute,
-      analysis.bodyLanguageAnalysis?.eyeContact?.percentage
+      bodyLanguageAssessable ? analysis.bodyLanguageAnalysis?.eyeContact?.percentage : undefined,
+      bodyLanguageAssessable
     );
 
     // Final enforcement of classification caps (after all score recomputation)
@@ -2497,6 +2971,28 @@ JSON OUTPUT RULES
     // Ensure we always provide at least 3 improvements (rubric requirement),
     // even if the model returns too few or filtering removes some.
     ensureMinPriorityImprovements(analysis, 3);
+    
+    // Truncate any overly long feedback strings to 900 chars
+    truncateFeedbackInPlace(analysis, 900);
+    
+    // Validate feedback quality (evidence bullets, quote verification)
+    const feedbackValidation = validateAnalysisFeedback(analysis, transcript);
+    if (!feedbackValidation.isValid) {
+      console.log(`   ⚠️ Feedback validation issues detected (${feedbackValidation.warnings.length} warnings):`);
+      for (const warning of feedbackValidation.warnings.slice(0, 5)) {
+        console.log(`      - ${warning}`);
+      }
+      if (feedbackValidation.warnings.length > 5) {
+        console.log(`      ... and ${feedbackValidation.warnings.length - 5} more`);
+      }
+      // Add warning to response but don't fail (guarded fallback)
+      const validationWarning = `Feedback quality check: ${feedbackValidation.warnings.length} issues found (some evidence may be incomplete)`;
+      analysisWarning = analysisWarning 
+        ? `${analysisWarning}; ${validationWarning}`
+        : validationWarning;
+    } else {
+      console.log('   ✓ Feedback validation passed');
+    }
     
     console.log('✅ Analysis successful!');
     return {

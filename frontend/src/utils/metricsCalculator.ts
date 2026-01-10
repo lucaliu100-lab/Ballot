@@ -7,7 +7,7 @@ export interface SpeechObject {
     content: number;
     delivery: number;
     language: number;
-    bodyLanguage: number;
+    bodyLanguage: number | null;  // null when body language was not assessable
     pace: number;
     fillerCount: number;
     priorityImprovements: string[];

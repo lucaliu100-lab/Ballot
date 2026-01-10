@@ -40,12 +40,24 @@ const PORT = process.env.PORT || 3001;
  * Store mapping of sessionId -> session data
  * In a real app, this would be stored in a database
  */
+/**
+ * Camera framing metadata for body language assessment eligibility.
+ * All three must be true for body language to be assessable.
+ */
+interface FramingData {
+  headVisible: boolean;
+  torsoVisible: boolean;
+  handsVisible: boolean;
+}
+
 interface SessionData {
   filePath: string;
   uploadedAt: Date;
   theme?: string;
   quote?: string;
   durationSecondsHint?: number;
+  /** Camera framing info for body language assessment eligibility */
+  framing?: FramingData;
 }
 
 const sessionStorage: Map<string, SessionData> = new Map();
@@ -700,12 +712,29 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
       ? Math.round(durationSecondsHintParsed)
       : undefined;
 
+  // Parse framing data if provided (for body language assessment eligibility)
+  let framing: FramingData | undefined;
+  try {
+    const framingRaw = req.body?.framing;
+    if (framingRaw) {
+      const parsed = typeof framingRaw === 'string' ? JSON.parse(framingRaw) : framingRaw;
+      framing = {
+        headVisible: parsed.headVisible === true || parsed.headVisible === 'true',
+        torsoVisible: parsed.torsoVisible === true || parsed.torsoVisible === 'true',
+        handsVisible: parsed.handsVisible === true || parsed.handsVisible === 'true',
+      };
+    }
+  } catch (e) {
+    console.warn('⚠️ Failed to parse framing data:', e);
+  }
+
   const sessionData: SessionData = {
     filePath,
     uploadedAt: new Date(),
     theme: req.body.theme,
     quote: req.body.quote,
     durationSecondsHint,
+    framing,
   };
 
   sessionStorage.set(sessionId, sessionData);
@@ -969,6 +998,7 @@ async function processAnalysisJob(sessionId: string, sessionData: SessionData): 
       theme: safeTheme || 'Unknown',
       quote: safeQuote || 'Unknown quote',
       durationSecondsHint: sessionData.durationSecondsHint,
+      framing: sessionData.framing,
     });
 
     job.progress = 90;
@@ -1084,6 +1114,7 @@ app.get('/api/analysis-status', (req, res) => {
  */
 function getMockAnalysis() {
   return {
+    bodyLanguageAssessable: true, // Mock data assumes full framing
     overallScore: 6.5,
     performanceTier: "Local",
     tournamentReady: false,
