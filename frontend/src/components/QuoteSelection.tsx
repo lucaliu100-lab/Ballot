@@ -18,8 +18,6 @@ function QuoteSelection({ roundData, onQuoteSelect }: QuoteSelectionProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
-  const contentOffsetPx = 44; // Align headers with quote text start (badge width 28 + gap 16)
-
   const parsedQuotes = useMemo(() => {
     return (roundData.quotes || []).map((raw) => {
       const text = String(raw ?? '');
@@ -57,16 +55,10 @@ function QuoteSelection({ roundData, onQuoteSelect }: QuoteSelectionProps) {
 
   return (
     <div style={styles.container}>
-      {/* Display the theme */}
       <div style={styles.inner}>
-        <div style={{ ...styles.headerBlock, paddingLeft: `${contentOffsetPx}px` }}>
-          <div style={styles.themeSection}>
-            <div style={styles.themeLabel}>TODAY'S THEME</div>
-            <h1 style={styles.theme}>{roundData.theme}</h1>
-          </div>
-
-          {/* Instructions */}
-          <p style={styles.instruction}>Select a quote that inspires you</p>
+        {/* Header - Left aligned with quotes */}
+        <div style={styles.headerBlock}>
+          <h1 style={styles.title}>Quotes for {roundData.theme}</h1>
         </div>
 
         {/* List of quotes to choose from */}
@@ -94,7 +86,7 @@ function QuoteSelection({ roundData, onQuoteSelect }: QuoteSelectionProps) {
                 <div style={styles.badge}>{index + 1}</div>
                 <div style={styles.quoteBody}>
                   <div style={styles.quoteText}>
-                    “{q.quoteText}”
+                    "{q.quoteText}"
                     {q.attribution ? (
                       <span style={styles.attribution}> — {q.attribution}</span>
                     ) : null}
@@ -105,6 +97,11 @@ function QuoteSelection({ roundData, onQuoteSelect }: QuoteSelectionProps) {
           })}
         </div>
       </div>
+
+      {/* Step Indicator at Bottom */}
+      <div style={styles.stepIndicator}>
+        STEP 2 OF 4
+      </div>
     </div>
   );
 }
@@ -114,44 +111,37 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    minHeight: '100vh',
+    height: 'calc(100vh - 64px)', // Account for navbar
+    overflow: 'hidden',
     padding: '0 24px',
     background: '#ffffff',
     maxWidth: '1280px',
     margin: '0 auto',
     fontFamily: "'Segoe UI', system-ui, sans-serif",
+    position: 'relative',
   },
   inner: {
+    flex: 1,
     width: '100%',
-    paddingTop: '72px',
-    paddingBottom: '120px',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    paddingBottom: '60px',
+    marginTop: '-32px', // Shift up to feel centered with navbar
   },
   headerBlock: {
     maxWidth: '800px',
     margin: '0 auto',
+    width: '100%',
+    marginBottom: '32px',
   },
-  themeSection: {
-    marginBottom: '60px',
-  },
-  themeLabel: {
-    color: '#6b7280',
-    fontSize: '12px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.12em',
-    display: 'block',
-  },
-  theme: {
+  title: {
     color: '#111827',
     fontSize: '48px',
-    margin: '8px 0 0 0',
+    margin: '0',
     fontWeight: 800,
     letterSpacing: '-0.02em',
-  },
-  instruction: {
-    color: '#6b7280',
-    fontSize: '18px',
-    margin: '0 0 40px 0',
-    fontWeight: 400,
+    textAlign: 'left',
   },
   quotesContainer: {
     display: 'flex',
@@ -159,6 +149,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '16px',
     maxWidth: '800px',
     margin: '0 auto',
+    width: '100%',
   },
   quoteCard: {
     display: 'flex',
@@ -200,10 +191,17 @@ const styles: Record<string, React.CSSProperties> = {
   quoteBody: {
     flex: 1,
   },
+  stepIndicator: {
+    position: 'absolute',
+    bottom: '24px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    fontSize: '12px',
+    fontWeight: 700,
+    color: '#9ca3af',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
 };
 
 export default QuoteSelection;
-
-
-
-

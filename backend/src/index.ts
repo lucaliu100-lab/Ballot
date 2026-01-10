@@ -50,6 +50,77 @@ interface SessionData {
 
 const sessionStorage: Map<string, SessionData> = new Map();
 
+/**
+ * Saved analysis results (persisted separately from job state)
+ * This allows us to return analysis even if job data is stale
+ */
+interface SavedAnalysis {
+  sessionId: string;
+  transcript: string;
+  analysis: any;
+  isMock: boolean;
+  savedAt: Date;
+}
+
+const analysisStorage: Map<string, SavedAnalysis> = new Map();
+
+/**
+ * Job status for async analysis processing
+ * Enables the frontend to poll for results without timing out
+ */
+type JobStatus = 'queued' | 'processing' | 'complete' | 'error';
+
+interface AnalysisJob {
+  jobId: string;
+  sessionId: string;
+  status: JobStatus;
+  progress: number;       // 0-100 progress percentage
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt?: Date;     // Set when job finishes (success or error)
+  // Result fields (populated when complete)
+  transcript?: string;
+  analysis?: any;
+  isMock?: boolean;
+  // Error field (populated on failure)
+  error?: string;
+}
+
+/**
+ * In-memory job store for analysis jobs
+ * Keyed by sessionId for easy lookup
+ */
+const jobStorage: Map<string, AnalysisJob> = new Map();
+
+/**
+ * Clean up old jobs and analyses periodically (keep for 1 hour)
+ */
+const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+setInterval(() => {
+  const now = Date.now();
+  let cleanedJobs = 0;
+  let cleanedAnalyses = 0;
+  
+  for (const [sessionId, job] of jobStorage.entries()) {
+    if (now - job.createdAt.getTime() > JOB_TTL_MS) {
+      jobStorage.delete(sessionId);
+      cleanedJobs++;
+    }
+  }
+  
+  for (const [sessionId, analysis] of analysisStorage.entries()) {
+    if (now - analysis.savedAt.getTime() > JOB_TTL_MS) {
+      analysisStorage.delete(sessionId);
+      cleanedAnalyses++;
+    }
+  }
+  
+  if (cleanedJobs > 0 || cleanedAnalyses > 0) {
+    console.log(`🧹 Cleanup: removed ${cleanedJobs} jobs, ${cleanedAnalyses} analyses`);
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
+
 // ===========================================
 // MIDDLEWARE SETUP
 // ===========================================
@@ -599,8 +670,11 @@ app.post('/api/start-round', (req, res) => {
  * Accepts a video file upload (multipart/form-data)
  * 
  * Expected form field: "file" (the video blob)
- * Optional JSON fields in body: theme, quote
- * Returns: { sessionId, filePath, message }
+ * Optional JSON fields in body: theme, quote, durationSeconds
+ * Returns: { sessionId, jobId, filePath, message }
+ * 
+ * This endpoint now also queues the analysis job immediately,
+ * so the frontend can navigate directly to /processing?sessionId=X&jobId=Y
  */
 app.post('/api/upload', upload.single('file'), (req, res) => {
   // Check if file was provided
@@ -610,6 +684,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
   // Generate a unique session ID for this upload
   const sessionId = uuidv4();
+  const jobId = uuidv4();
   
   // Get the path where the file was saved
   const filePath = req.file.path;
@@ -625,26 +700,47 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
       ? Math.round(durationSecondsHintParsed)
       : undefined;
 
-  sessionStorage.set(sessionId, {
+  const sessionData: SessionData = {
     filePath,
     uploadedAt: new Date(),
     theme: req.body.theme,
     quote: req.body.quote,
     durationSecondsHint,
-  });
+  };
+
+  sessionStorage.set(sessionId, sessionData);
+
+  // Create job immediately so it's ready for polling
+  const now = new Date();
+  const job: AnalysisJob = {
+    jobId,
+    sessionId,
+    status: 'queued',
+    progress: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  jobStorage.set(sessionId, job);
 
   console.log('📹 Video uploaded successfully!');
   console.log('   Session ID:', sessionId);
+  console.log('   Job ID:', jobId);
   console.log('   File path:', filePath);
   console.log('   File size:', (req.file.size / 1024 / 1024).toFixed(2), 'MB');
   if (durationSecondsHint) console.log('   Client duration hint:', durationSecondsHint, 'sec');
   console.log('   Active sessions:', sessionStorage.size);
 
-  // Return success response
+  // Start processing in background immediately
+  processAnalysisJob(sessionId, sessionData).catch((err) => {
+    console.error(`❌ Background job failed for session ${sessionId}:`, err);
+  });
+
+  // Return success response with both sessionId and jobId
   res.json({
     sessionId,
+    jobId,
     filePath,
-    message: 'Upload successful!',
+    message: 'Upload successful! Analysis queued.',
   });
 });
 
@@ -671,10 +767,16 @@ app.use((err: unknown, req: express.Request, res: express.Response, next: expres
 
 /**
  * POST /api/process-all
- * Perform multimodal analysis (Audio/Video/Feedback) in one pass using Gemini
+ * Queue multimodal analysis (Audio/Video/Feedback) and return immediately
+ * 
+ * This endpoint now returns immediately with a job status, enabling the frontend
+ * to poll for results without timing out during high-concurrency classroom scenarios.
+ * 
+ * NOTE: The /api/upload endpoint now queues jobs automatically. This endpoint
+ * is kept for backward compatibility and handles edge cases (e.g., job needs restart).
  * 
  * Expected JSON body: { sessionId: string }
- * Returns: { transcript, videoSummary, feedback, speechStats }
+ * Returns: { jobId, sessionId, status: 'queued' | 'processing' | 'complete', progress }
  */
 app.post('/api/process-all', async (req, res) => {
   const { sessionId } = req.body;
@@ -683,123 +785,184 @@ app.post('/api/process-all', async (req, res) => {
     return res.status(400).json({ error: 'Missing sessionId' });
   }
 
-  console.log('\n🌟 Processing multimodal analysis for session:', sessionId);
+  console.log('\n🌟 [process-all] Request for session:', sessionId);
+
+  // Check if analysis already exists (fast path)
+  const savedAnalysis = analysisStorage.get(sessionId);
+  if (savedAnalysis) {
+    console.log(`✅ [process-all] Analysis already exists for ${sessionId}, returning complete`);
+    const job = jobStorage.get(sessionId);
+    return res.json({
+      jobId: job?.jobId || 'completed',
+      sessionId,
+      status: 'complete',
+      progress: 100,
+    });
+  }
 
   const sessionData = sessionStorage.get(sessionId);
   if (!sessionData) {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  const { filePath: videoPath, theme, quote } = sessionData;
+  const { filePath: videoPath } = sessionData;
 
   if (!fs.existsSync(videoPath)) {
     sessionStorage.delete(sessionId);
     return res.status(404).json({ error: 'Video file not found' });
   }
 
-  if (!isGeminiConfigured()) {
-    console.warn('⚠️ Gemini API not configured - returning mock data');
+  // Check if there's already a job for this session
+  const existingJob = jobStorage.get(sessionId);
+  if (existingJob) {
+    console.log(`📋 [process-all] Existing job for ${sessionId}: status=${existingJob.status}, progress=${existingJob.progress}`);
     return res.json({
+      jobId: existingJob.jobId,
       sessionId,
-      transcript: "[Mock Transcript] Gemini API is not configured. Please add OPENROUTER_API_KEY to your .env file.",
-      analysis: {
-        overallScore: 6.5,
-        performanceTier: "Local",
-        tournamentReady: false,
-        categoryScores: {
-          content: { score: 6, weight: 0.40, weighted: 2.4 },
-          delivery: { score: 7, weight: 0.30, weighted: 2.1 },
-          language: { score: 7, weight: 0.15, weighted: 1.05 },
-          bodyLanguage: { score: 6, weight: 0.15, weighted: 0.9 }
-        },
-        contentAnalysis: {
-          topicAdherence: { 
-            score: 7, 
-            feedback: "**Score Justification:** You addressed the theme consistently throughout the speech, maintaining focus on the central thesis. Your interpretation was reasonable and defensible.\n\n**Evidence from Speech:**\n- Opening (0:15): Directly referenced the quote and established clear connection\n- Middle sections (1:30, 2:45): All points tied back to the theme\n- Avoided tangents and stayed on topic throughout\n\n**What This Means:** Your topic adherence is strong for local tournaments. You understand how to maintain thematic consistency.\n\n**How to Improve:**\n1. Deepen your interpretation: Instead of surface-level connection, explore nuanced meanings of the quote\n2. Explicitly link back: After each point, state \"This relates to [quote] because...\"\n3. Test each example: Ask \"Does this advance my thesis?\" before including it" 
-          },
-          argumentStructure: { 
-            score: 6, 
-            feedback: "**Score Justification:** You had a clear three-part structure (intro, body, conclusion), but transitions were weak and point development was uneven.\n\n**Evidence from Speech:**\n- Introduction (0:00-0:30): Clear thesis, but no roadmap previewing your points\n- Body: Two main points, but transition at 2:00 was abrupt (\"Also, another thing...\")\n- Conclusion: Summarized well but introduced new idea at 4:45\n\n**What This Means:** Your basic structure is sound, but competitive debaters need explicit signposting and balanced point development.\n\n**How to Improve:**\n1. Add roadmap: \"Today I'll explore three ways...\" in your intro (10 seconds)\n2. Use explicit transitions: \"My first point...\" \"Moving to my second point...\" \"Finally...\"\n3. Time your points: Aim for equal development (90 seconds each for two points)" 
-          },
-          depthOfAnalysis: { score: 5, feedback: "[Mock] Surface level analysis." },
-          examplesEvidence: { score: 6, feedback: "[Mock] Good examples used." },
-          timeManagement: { score: 7, feedback: "[Mock] Good use of time." }
-        },
-        deliveryAnalysis: {
-          vocalVariety: { 
-            score: 7, 
-            feedback: "**Score Justification:** You demonstrated good vocal variety with clear tone changes and pitch modulation, though some sections remained in a single register.\n\n**Evidence from Speech:**\n- Opening (0:00-0:30): Dynamic introduction with rising pitch on key words\n- Point 1 (1:00-2:00): Maintained energy and varied tone appropriately\n- Point 2 (2:30-3:00): Became somewhat monotone during explanation at 2:45\n\n**What This Means:** Your vocal variety is competitive-ready for most sections, but needs consistency throughout to maintain audience engagement.\n\n**How to Improve:**\n1. Mark emphasis words during prep: Underline 3-5 words per point to emphasize with volume/pitch\n2. Use the \"Three Tones\" technique: Explanatory (mid-range), Narrative (warm, lower), Persuasive (high energy)\n3. Record and exaggerate: Practice with 50% more variety than feels natural—it will sound more engaging" 
-          },
-          pacing: { 
-            score: 7, 
-            wpm: 145, 
-            feedback: "**Score Justification:** Your pace of 145 WPM falls within the optimal competitive range (140-160 WPM), and you used some strategic pauses.\n\n**Evidence from Speech:**\n- Overall WPM: 145 (725 words ÷ 5 minutes)  \n- Good pace during opening and conclusion\n- Rushed slightly during transition at 2:00 (approximately 170 WPM burst)\n- Used 2-second pause before thesis at 0:28 (excellent)\n\n**What This Means:** Your pacing is tournament-ready. The slight rush during transitions is common and easily fixable.\n\n**How to Improve:**\n1. Script transitions word-for-word during prep to avoid rushing between points\n2. Use \"count to three\" pauses after major statements (thesis, point summaries, before conclusion)\n3. Mark \"SLOW\" on prep paper at sections where you tend to rush" 
-          },
-          articulation: { score: 7, feedback: "[Mock] Clear enunciation." },
-          fillerWords: { score: 8, total: 12, perMinute: 2.5, breakdown: { "um": 5, "uh": 7 }, feedback: "[Mock] Excellent filler control. Rate of 2.5 per minute is well below the 5/min competitive target." }
-        },
-        languageAnalysis: {
-          vocabulary: { 
-            score: 7, 
-            feedback: "**Score Justification:** Your vocabulary was strong with good variety and academic register. Some repetition of key terms, but overall demonstrated linguistic sophistication.\n\n**Evidence from Speech:**\n- Used \"contentment\" and \"fulfillment\" instead of repeatedly saying \"happiness\" (good synonym variety)\n- Academic terms: \"intrinsic motivation\" (1:30), \"emotional intelligence\" (2:45)\n- Avoided casual phrases like \"stuff\" or \"things\" (professional register maintained)\n\n**What This Means:** Your vocabulary elevates your content to competitive level. You sound like a serious debater, not a casual speaker.\n\n**How to Improve:**\n1. Create synonym bank during prep: Write 5 synonyms for your key concept to rotate through speech\n2. Learn 2-3 academic terms per topic: For happiness topics, add \"hedonic adaptation,\" \"positive psychology,\" \"self-determination theory\"\n3. Use \"power verbs\": Replace \"makes us happy\" with \"cultivates joy,\" \"fosters well-being,\" \"generates contentment\"" 
-          },
-          rhetoricalDevices: { 
-            score: 6, 
-            examples: ["Rule of three at 3:20", "Rhetorical question at 0:15"], 
-            feedback: "**Score Justification:** You used 2-3 rhetorical devices effectively, though integration could be more natural and variety could increase.\n\n**Evidence from Speech:**\n- Rhetorical question (0:15): \"What makes life meaningful?\" - effective hook\n- Rule of three (3:20): \"Through gratitude, through service, through challenge\" - memorable structure\n- Missed opportunities: Could have used metaphor, analogy, or parallel structure\n\n**What This Means:** You understand rhetorical devices but haven't fully integrated them as persuasive tools. Competitive speeches typically use 4-5 distinct devices.\n\n**How to Improve:**\n1. Add one metaphor per speech: \"Happiness isn't a destination—it's fuel for the journey\"\n2. Use parallel structure: \"We create happiness when we choose gratitude, when we pursue challenge, when we serve others\"\n3. End with anaphora: \"Tomorrow, build your happiness. Tomorrow, own your joy. Tomorrow, create your fulfillment.\"" 
-          },
-          emotionalAppeal: { score: 7, feedback: "[Mock] Strong pathos with good personal storytelling." },
-          logicalAppeal: { score: 7, feedback: "[Mock] Clear cause-effect reasoning with strong logical connectors." }
-        },
-        bodyLanguageAnalysis: {
-          eyeContact: { 
-            score: 6, 
-            percentage: 65, 
-            feedback: "**Score Justification:** Your eye contact was 65% throughout the speech—below the competitive target of 75%+ but better than average. You broke eye contact during key moments which weakened impact.\n\n**Evidence from Speech:**\n- Opening (0:00-0:15): Strong 80% eye contact during hook\n- Thesis (0:28-0:35): Looked down at notes for 5 of 7 seconds—critical moment lost\n- Body points: Maintained 70% contact during first point, dropped to 50% during second point (2:30-3:15)\n- Conclusion: Good recovery with 75% contact, but final statement delivered while looking at notes\n\n**What This Means:** You need to memorize your most important moments (thesis, conclusion, key examples) to maintain connection with judges during these high-impact seconds.\n\n**How to Improve:**\n1. Minimal notes rule: Write only keywords on prep paper (\"P1: Gratitude | Ex: journal\"), not full sentences\n2. Memorize \"big three\": Thesis, best example, and closing sentence must be 100% from memory\n3. Five-second rule: Never look down for more than 5 consecutive seconds. Glance, absorb, look up, speak for 20+ seconds before next glance" 
-          },
-          gestures: { 
-            score: 7, 
-            feedback: "**Score Justification:** Your gestures were purposeful and natural, with good variety and appropriate timing. Minor issue: hands occasionally dropped to sides during explanatory sections.\n\n**Evidence from Speech:**\n- Opening: Open gestures, hands above waist, inviting (excellent)\n- Point 1 (1:30): Emphasized \"three ways\" with three fingers (perfect timing)\n- Point 2 (2:45): Hands dropped to sides for 15 seconds during explanation (lost energy)\n- Conclusion: Strong closing gesture on final words\n\n**What This Means:** Your gestures enhance your message when you use them. The key is maintaining gesture energy throughout, not just in high-energy moments.\n\n**How to Improve:**\n1. \"Hands above waist\" rule: Keep hands at chest/stomach level as default position, never hanging at sides\n2. Mark gesture moments during prep: Note 2-3 places per point where you'll use emphatic gestures\n3. Practice \"gesture hold\": After making a gesture (e.g., counting on fingers), hold it for 2-3 seconds before transitioning" 
-          },
-          posture: { score: 7, feedback: "[Mock] Confident, upright posture maintained throughout. Good professional presence." },
-          stagePresence: { score: 7, feedback: "[Mock] Strong stage presence with good energy and confidence. Excellent audience connection." }
-        },
-        speechStats: {
-          duration: "5:00",
-          wordCount: 725,
-          wpm: 145,
-          fillerWordCount: 12,
-          fillerWordRate: 2.4
-        },
-        structureAnalysis: {
-          introduction: { timeRange: "0:00-0:30", assessment: "Strong opening with clear thesis statement. Hook effectively captures attention." },
-          bodyPoints: [
-            { timeRange: "0:30-1:45", assessment: "First main point well-articulated with supporting evidence. Clear reasoning." },
-            { timeRange: "1:45-3:00", assessment: "Second point builds logically from the first. Good use of examples." },
-            { timeRange: "3:00-4:30", assessment: "Final point effectively ties arguments together. Strong rhetorical appeal." }
-          ],
-          conclusion: { timeRange: "4:30-5:00", assessment: "Powerful conclusion with memorable closing statement." }
-        },
-        priorityImprovements: [
-          { priority: 1, issue: "Eye contact", action: "Practice scanning the room", impact: "Increased audience engagement" }
-        ],
-        strengths: ["Strong delivery", "Good energy"],
-        practiceDrill: "Practice with a mirror to improve eye contact.",
-        nextSessionFocus: { primary: "Eye contact", metric: "75% consistent eye contact" }
-      },
-      isMock: true,
+      status: existingJob.status,
+      progress: existingJob.progress || 0,
     });
   }
 
+  // Create a new job (shouldn't happen often since /api/upload creates it)
+  const jobId = uuidv4();
+  const now = new Date();
+  const job: AnalysisJob = {
+    jobId,
+    sessionId,
+    status: 'queued',
+    progress: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  jobStorage.set(sessionId, job);
+
+  console.log(`📝 [process-all] Created job ${jobId} for session ${sessionId}`);
+
+  // Return immediately - frontend will poll for status
+  res.json({
+    jobId,
+    sessionId,
+    status: 'queued',
+    progress: 0,
+  });
+
+  // Process in background (fire-and-forget)
+  processAnalysisJob(sessionId, sessionData).catch((err) => {
+    console.error(`❌ Background job failed for session ${sessionId}:`, err);
+  });
+});
+
+/**
+ * Helper function to save analysis results to persistent storage
+ * Called on ALL successful analysis paths to ensure data is preserved
+ */
+function saveAnalysis(sessionId: string, transcript: string, analysis: any, isMock: boolean): void {
+  const savedAnalysis: SavedAnalysis = {
+    sessionId,
+    transcript,
+    analysis,
+    isMock,
+    savedAt: new Date(),
+  };
+  analysisStorage.set(sessionId, savedAnalysis);
+  console.log(`💾 [saveAnalysis] Analysis saved for session ${sessionId}`);
+}
+
+/**
+ * Helper function to mark job as completed
+ * MUST be called on every completion path (success or error)
+ */
+function completeJob(
+  job: AnalysisJob,
+  status: 'complete' | 'error',
+  data: { transcript?: string; analysis?: any; isMock?: boolean; error?: string }
+): void {
+  const now = new Date();
+  job.status = status;
+  job.progress = status === 'complete' ? 100 : job.progress;
+  job.completedAt = now;
+  job.updatedAt = now;
+  
+  if (data.transcript !== undefined) job.transcript = data.transcript;
+  if (data.analysis !== undefined) job.analysis = data.analysis;
+  if (data.isMock !== undefined) job.isMock = data.isMock;
+  if (data.error !== undefined) job.error = data.error;
+  
+  console.log(`📊 [completeJob] Job ${job.jobId} for session ${job.sessionId} -> status=${status}, progress=${job.progress}`);
+}
+
+/**
+ * Background processing function for analysis jobs
+ * Uses try/catch/finally pattern to ensure job completion is ALWAYS recorded
+ */
+async function processAnalysisJob(sessionId: string, sessionData: SessionData): Promise<void> {
+  const job = jobStorage.get(sessionId);
+  if (!job) {
+    console.error(`❌ [processAnalysisJob] Job not found for session ${sessionId}`);
+    return;
+  }
+
+  // Check if analysis already exists (avoid duplicate processing)
+  const existingAnalysis = analysisStorage.get(sessionId);
+  if (existingAnalysis) {
+    console.log(`✅ [processAnalysisJob] Analysis already exists for ${sessionId}, marking job complete`);
+    completeJob(job, 'complete', {
+      transcript: existingAnalysis.transcript,
+      analysis: existingAnalysis.analysis,
+      isMock: existingAnalysis.isMock,
+    });
+    return;
+  }
+
+  // Update status to processing
+  job.status = 'processing';
+  job.progress = 10;
+  job.updatedAt = new Date();
+  console.log(`🔄 [processAnalysisJob] Processing analysis for session ${sessionId}...`);
+
+  // Optional: Simulate processing delay for testing classroom concurrency
+  const simulatedDelayMs = parseInt(process.env.SIMULATE_PROCESSING_DELAY_MS || '0', 10);
+  if (simulatedDelayMs > 0) {
+    console.log(`🧪 Simulating ${simulatedDelayMs}ms processing delay...`);
+    await new Promise(resolve => setTimeout(resolve, simulatedDelayMs));
+    console.log(`🧪 Simulated delay complete`);
+  }
+
+  const { filePath: videoPath, theme, quote } = sessionData;
+
+  // Handle mock mode (Gemini not configured)
+  if (!isGeminiConfigured()) {
+    console.warn('⚠️ [processAnalysisJob] Gemini API not configured - storing mock data');
+    const mockTranscript = "[Mock Transcript] Gemini API is not configured. Please add OPENROUTER_API_KEY to your .env file.";
+    const mockAnalysis = getMockAnalysis();
+    
+    // Save to both storages
+    saveAnalysis(sessionId, mockTranscript, mockAnalysis, true);
+    completeJob(job, 'complete', {
+      transcript: mockTranscript,
+      analysis: mockAnalysis,
+      isMock: true,
+    });
+    return;
+  }
+
+  // Main analysis - wrapped in try/finally to guarantee job completion
+  let analysisSucceeded = false;
+  let analysisError: string | undefined;
+  
   try {
     const safeTheme = typeof theme === 'string' && theme.trim() ? theme.trim() : '';
     const safeQuote = typeof quote === 'string' && quote.trim() ? quote.trim() : '';
     if (!safeTheme) {
-      console.warn(`⚠️ Missing theme for session ${sessionId}. Frontend should send theme during /api/upload. Using "Unknown".`);
+      console.warn(`⚠️ [processAnalysisJob] Missing theme for session ${sessionId}. Using "Unknown".`);
     }
     if (!safeQuote) {
-      console.warn(`⚠️ Missing quote for session ${sessionId}. Frontend should send quote during /api/upload. Using "Unknown quote".`);
+      console.warn(`⚠️ [processAnalysisJob] Missing quote for session ${sessionId}. Using "Unknown quote".`);
     }
+
+    job.progress = 30;
+    job.updatedAt = new Date();
 
     const result = await analyzeSpeechWithGemini({
       videoPath,
@@ -808,24 +971,204 @@ app.post('/api/process-all', async (req, res) => {
       durationSecondsHint: sessionData.durationSecondsHint,
     });
 
-    if (!result.success) {
-      // Return the exact failure reason (no secrets) so the frontend can show meaningful "technical details".
-      return res.status(500).json({ error: result.error || 'Analysis failed' });
-    }
+    job.progress = 90;
+    job.updatedAt = new Date();
 
-    res.json({
-      sessionId,
-      transcript: result.transcript,
-      analysis: result.analysis,
-      isMock: false,
-    });
+    if (!result.success) {
+      analysisError = result.error || 'Analysis failed';
+      console.error(`❌ [processAnalysisJob] Analysis returned error for session ${sessionId}: ${analysisError}`);
+    } else {
+      // SUCCESS PATH - save analysis AND complete job
+      analysisSucceeded = true;
+      const transcript = result.transcript || '';
+      const analysis = result.analysis;
+      
+      console.log(`✅ [processAnalysisJob] Analysis succeeded for session ${sessionId}`);
+      
+      // CRITICAL: Save analysis first, then update job
+      saveAnalysis(sessionId, transcript, analysis, false);
+      completeJob(job, 'complete', {
+        transcript,
+        analysis,
+        isMock: false,
+      });
+    }
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('❌ Multimodal analysis failed:', errorMessage);
-    res.status(500).json({ error: `Analysis failed: ${errorMessage}` });
+    analysisError = `Analysis exception: ${errorMessage}`;
+    console.error(`❌ [processAnalysisJob] Exception for session ${sessionId}:`, errorMessage);
+  } finally {
+    // GUARANTEE: Job is marked complete/error even if early return was missed
+    if (!analysisSucceeded && job.status !== 'complete' && job.status !== 'error') {
+      console.warn(`⚠️ [processAnalysisJob] Finally block catching incomplete job for ${sessionId}`);
+      completeJob(job, 'error', { error: analysisError || 'Analysis did not complete properly' });
+    }
   }
+}
+
+/**
+ * GET /api/analysis-status
+ * Poll for analysis job status and results
+ * 
+ * IMPORTANT: If analysis exists in storage, return 'complete' regardless of job state.
+ * This handles race conditions where job state is stale but analysis succeeded.
+ * 
+ * Query params: sessionId, jobId (optional, for logging)
+ * Returns: { jobId, sessionId, status, progress, transcript?, analysis?, isMock?, error? }
+ */
+app.get('/api/analysis-status', (req, res) => {
+  const sessionId = req.query.sessionId as string;
+  const jobId = req.query.jobId as string;
+
+  if (!sessionId) {
+    return res.status(400).json({ error: 'Missing sessionId query parameter' });
+  }
+
+  console.log(`📊 [analysis-status] Poll for session=${sessionId}, jobId=${jobId || 'not provided'}`);
+
+  // PRIORITY 1: Check if analysis already exists (completed successfully)
+  const savedAnalysis = analysisStorage.get(sessionId);
+  if (savedAnalysis) {
+    const job = jobStorage.get(sessionId);
+    console.log(`✅ [analysis-status] Analysis found for ${sessionId}, returning complete`);
+    return res.json({
+      jobId: job?.jobId || 'completed',
+      sessionId,
+      status: 'complete',
+      progress: 100,
+      createdAt: job?.createdAt?.toISOString() || savedAnalysis.savedAt.toISOString(),
+      updatedAt: savedAnalysis.savedAt.toISOString(),
+      transcript: savedAnalysis.transcript,
+      analysis: savedAnalysis.analysis,
+      isMock: savedAnalysis.isMock,
+    });
+  }
+
+  // PRIORITY 2: Check job state
+  const job = jobStorage.get(sessionId);
+  if (!job) {
+    console.warn(`⚠️ [analysis-status] No job found for session ${sessionId}`);
+    return res.status(404).json({ error: 'No analysis job found for this session' });
+  }
+
+  console.log(`📊 [analysis-status] Job status for ${sessionId}: status=${job.status}, progress=${job.progress}`);
+
+  // Build response based on job status
+  const response: any = {
+    jobId: job.jobId,
+    sessionId: job.sessionId,
+    status: job.status,
+    progress: job.progress || 0,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+  };
+
+  if (job.completedAt) {
+    response.completedAt = job.completedAt.toISOString();
+  }
+
+  if (job.status === 'complete') {
+    response.transcript = job.transcript;
+    response.analysis = job.analysis;
+    response.isMock = job.isMock;
+  } else if (job.status === 'error') {
+    response.error = job.error;
+  }
+
+  res.json(response);
 });
+
+/**
+ * Returns mock analysis data for when Gemini is not configured
+ */
+function getMockAnalysis() {
+  return {
+    overallScore: 6.5,
+    performanceTier: "Local",
+    tournamentReady: false,
+    categoryScores: {
+      content: { score: 6, weight: 0.40, weighted: 2.4 },
+      delivery: { score: 7, weight: 0.30, weighted: 2.1 },
+      language: { score: 7, weight: 0.15, weighted: 1.05 },
+      bodyLanguage: { score: 6, weight: 0.15, weighted: 0.9 }
+    },
+    contentAnalysis: {
+      topicAdherence: { 
+        score: 7, 
+        feedback: "**Score Justification:** You addressed the theme consistently throughout the speech, maintaining focus on the central thesis. Your interpretation was reasonable and defensible.\n\n**Evidence from Speech:**\n- Opening (0:15): Directly referenced the quote and established clear connection\n- Middle sections (1:30, 2:45): All points tied back to the theme\n- Avoided tangents and stayed on topic throughout\n\n**What This Means:** Your topic adherence is strong for local tournaments. You understand how to maintain thematic consistency.\n\n**How to Improve:**\n1. Deepen your interpretation: Instead of surface-level connection, explore nuanced meanings of the quote\n2. Explicitly link back: After each point, state \"This relates to [quote] because...\"\n3. Test each example: Ask \"Does this advance my thesis?\" before including it" 
+      },
+      argumentStructure: { 
+        score: 6, 
+        feedback: "**Score Justification:** You had a clear three-part structure (intro, body, conclusion), but transitions were weak and point development was uneven.\n\n**Evidence from Speech:**\n- Introduction (0:00-0:30): Clear thesis, but no roadmap previewing your points\n- Body: Two main points, but transition at 2:00 was abrupt (\"Also, another thing...\")\n- Conclusion: Summarized well but introduced new idea at 4:45\n\n**What This Means:** Your basic structure is sound, but competitive debaters need explicit signposting and balanced point development.\n\n**How to Improve:**\n1. Add roadmap: \"Today I'll explore three ways...\" in your intro (10 seconds)\n2. Use explicit transitions: \"My first point...\" \"Moving to my second point...\" \"Finally...\"\n3. Time your points: Aim for equal development (90 seconds each for two points)" 
+      },
+      depthOfAnalysis: { score: 5, feedback: "[Mock] Surface level analysis." },
+      examplesEvidence: { score: 6, feedback: "[Mock] Good examples used." },
+      timeManagement: { score: 7, feedback: "[Mock] Good use of time." }
+    },
+    deliveryAnalysis: {
+      vocalVariety: { 
+        score: 7, 
+        feedback: "**Score Justification:** You demonstrated good vocal variety with clear tone changes and pitch modulation, though some sections remained in a single register.\n\n**Evidence from Speech:**\n- Opening (0:00-0:30): Dynamic introduction with rising pitch on key words\n- Point 1 (1:00-2:00): Maintained energy and varied tone appropriately\n- Point 2 (2:30-3:00): Became somewhat monotone during explanation at 2:45\n\n**What This Means:** Your vocal variety is competitive-ready for most sections, but needs consistency throughout to maintain audience engagement.\n\n**How to Improve:**\n1. Mark emphasis words during prep: Underline 3-5 words per point to emphasize with volume/pitch\n2. Use the \"Three Tones\" technique: Explanatory (mid-range), Narrative (warm, lower), Persuasive (high energy)\n3. Record and exaggerate: Practice with 50% more variety than feels natural—it will sound more engaging" 
+      },
+      pacing: { 
+        score: 7, 
+        wpm: 145, 
+        feedback: "**Score Justification:** Your pace of 145 WPM falls within the optimal competitive range (140-160 WPM), and you used some strategic pauses.\n\n**Evidence from Speech:**\n- Overall WPM: 145 (725 words ÷ 5 minutes)  \n- Good pace during opening and conclusion\n- Rushed slightly during transition at 2:00 (approximately 170 WPM burst)\n- Used 2-second pause before thesis at 0:28 (excellent)\n\n**What This Means:** Your pacing is tournament-ready. The slight rush during transitions is common and easily fixable.\n\n**How to Improve:**\n1. Script transitions word-for-word during prep to avoid rushing between points\n2. Use \"count to three\" pauses after major statements (thesis, point summaries, before conclusion)\n3. Mark \"SLOW\" on prep paper at sections where you tend to rush" 
+      },
+      articulation: { score: 7, feedback: "[Mock] Clear enunciation." },
+      fillerWords: { score: 8, total: 12, perMinute: 2.5, breakdown: { "um": 5, "uh": 7 }, feedback: "[Mock] Excellent filler control. Rate of 2.5 per minute is well below the 5/min competitive target." }
+    },
+    languageAnalysis: {
+      vocabulary: { 
+        score: 7, 
+        feedback: "**Score Justification:** Your vocabulary was strong with good variety and academic register. Some repetition of key terms, but overall demonstrated linguistic sophistication.\n\n**Evidence from Speech:**\n- Used \"contentment\" and \"fulfillment\" instead of repeatedly saying \"happiness\" (good synonym variety)\n- Academic terms: \"intrinsic motivation\" (1:30), \"emotional intelligence\" (2:45)\n- Avoided casual phrases like \"stuff\" or \"things\" (professional register maintained)\n\n**What This Means:** Your vocabulary elevates your content to competitive level. You sound like a serious debater, not a casual speaker.\n\n**How to Improve:**\n1. Create synonym bank during prep: Write 5 synonyms for your key concept to rotate through speech\n2. Learn 2-3 academic terms per topic: For happiness topics, add \"hedonic adaptation,\" \"positive psychology,\" \"self-determination theory\"\n3. Use \"power verbs\": Replace \"makes us happy\" with \"cultivates joy,\" \"fosters well-being,\" \"generates contentment\"" 
+      },
+      rhetoricalDevices: { 
+        score: 6, 
+        examples: ["Rule of three at 3:20", "Rhetorical question at 0:15"], 
+        feedback: "**Score Justification:** You used 2-3 rhetorical devices effectively, though integration could be more natural and variety could increase.\n\n**Evidence from Speech:**\n- Rhetorical question (0:15): \"What makes life meaningful?\" - effective hook\n- Rule of three (3:20): \"Through gratitude, through service, through challenge\" - memorable structure\n- Missed opportunities: Could have used metaphor, analogy, or parallel structure\n\n**What This Means:** You understand rhetorical devices but haven't fully integrated them as persuasive tools. Competitive speeches typically use 4-5 distinct devices.\n\n**How to Improve:**\n1. Add one metaphor per speech: \"Happiness isn't a destination—it's fuel for the journey\"\n2. Use parallel structure: \"We create happiness when we choose gratitude, when we pursue challenge, when we serve others\"\n3. End with anaphora: \"Tomorrow, build your happiness. Tomorrow, own your joy. Tomorrow, create your fulfillment.\"" 
+      },
+      emotionalAppeal: { score: 7, feedback: "[Mock] Strong pathos with good personal storytelling." },
+      logicalAppeal: { score: 7, feedback: "[Mock] Clear cause-effect reasoning with strong logical connectors." }
+    },
+    bodyLanguageAnalysis: {
+      eyeContact: { 
+        score: 6, 
+        percentage: 65, 
+        feedback: "**Score Justification:** Your eye contact was 65% throughout the speech—below the competitive target of 75%+ but better than average. You broke eye contact during key moments which weakened impact.\n\n**Evidence from Speech:**\n- Opening (0:00-0:15): Strong 80% eye contact during hook\n- Thesis (0:28-0:35): Looked down at notes for 5 of 7 seconds—critical moment lost\n- Body points: Maintained 70% contact during first point, dropped to 50% during second point (2:30-3:15)\n- Conclusion: Good recovery with 75% contact, but final statement delivered while looking at notes\n\n**What This Means:** You need to memorize your most important moments (thesis, conclusion, key examples) to maintain connection with judges during these high-impact seconds.\n\n**How to Improve:**\n1. Minimal notes rule: Write only keywords on prep paper (\"P1: Gratitude | Ex: journal\"), not full sentences\n2. Memorize \"big three\": Thesis, best example, and closing sentence must be 100% from memory\n3. Five-second rule: Never look down for more than 5 consecutive seconds. Glance, absorb, look up, speak for 20+ seconds before next glance" 
+      },
+      gestures: { 
+        score: 7, 
+        feedback: "**Score Justification:** Your gestures were purposeful and natural, with good variety and appropriate timing. Minor issue: hands occasionally dropped to sides during explanatory sections.\n\n**Evidence from Speech:**\n- Opening: Open gestures, hands above waist, inviting (excellent)\n- Point 1 (1:30): Emphasized \"three ways\" with three fingers (perfect timing)\n- Point 2 (2:45): Hands dropped to sides for 15 seconds during explanation (lost energy)\n- Conclusion: Strong closing gesture on final words\n\n**What This Means:** Your gestures enhance your message when you use them. The key is maintaining gesture energy throughout, not just in high-energy moments.\n\n**How to Improve:**\n1. \"Hands above waist\" rule: Keep hands at chest/stomach level as default position, never hanging at sides\n2. Mark gesture moments during prep: Note 2-3 places per point where you'll use emphatic gestures\n3. Practice \"gesture hold\": After making a gesture (e.g., counting on fingers), hold it for 2-3 seconds before transitioning" 
+      },
+      posture: { score: 7, feedback: "[Mock] Confident, upright posture maintained throughout. Good professional presence." },
+      stagePresence: { score: 7, feedback: "[Mock] Strong stage presence with good energy and confidence. Excellent audience connection." }
+    },
+    speechStats: {
+      duration: "5:00",
+      wordCount: 725,
+      wpm: 145,
+      fillerWordCount: 12,
+      fillerWordRate: 2.4
+    },
+    structureAnalysis: {
+      introduction: { timeRange: "0:00-0:30", assessment: "Strong opening with clear thesis statement. Hook effectively captures attention." },
+      bodyPoints: [
+        { timeRange: "0:30-1:45", assessment: "First main point well-articulated with supporting evidence. Clear reasoning." },
+        { timeRange: "1:45-3:00", assessment: "Second point builds logically from the first. Good use of examples." },
+        { timeRange: "3:00-4:30", assessment: "Final point effectively ties arguments together. Strong rhetorical appeal." }
+      ],
+      conclusion: { timeRange: "4:30-5:00", assessment: "Powerful conclusion with memorable closing statement." }
+    },
+    priorityImprovements: [
+      { priority: 1, issue: "Eye contact", action: "Practice scanning the room", impact: "Increased audience engagement" }
+    ],
+    strengths: ["Strong delivery", "Good energy"],
+    practiceDrill: "Practice with a mirror to improve eye contact.",
+    nextSessionFocus: { primary: "Eye contact", metric: "75% consistent eye contact" }
+  };
+}
 
 // Remove old endpoints
 // /api/process-audio, /api/analyze-video, /api/generate-feedback have been removed
@@ -884,11 +1227,19 @@ app.listen(PORT, async () => {
     console.log('');
   }
   
+  // Check for simulated delay (testing)
+  const simulatedDelay = process.env.SIMULATE_PROCESSING_DELAY_MS;
+  if (simulatedDelay) {
+    console.log(`🧪 TESTING MODE: Simulated processing delay of ${simulatedDelay}ms enabled`);
+    console.log('');
+  }
+  
   console.log('Available endpoints:');
   console.log('  GET  /api/ping             - Health check');
   console.log('  GET  /api/status           - Check service configuration');
   console.log('  POST /api/start-round      - Get theme & quotes');
   console.log('  POST /api/upload           - Upload video recording');
-  console.log('  POST /api/process-all      - Multimodal analysis (Gemini)');
+  console.log('  POST /api/process-all      - Queue multimodal analysis');
+  console.log('  GET  /api/analysis-status  - Poll analysis job status');
   console.log('');
 });

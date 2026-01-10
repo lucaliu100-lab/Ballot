@@ -14,6 +14,7 @@ export interface RoundData {
 // Response from /api/upload
 export interface UploadResponse {
   sessionId: string;
+  jobId: string;        // Now returned by upload endpoint
   filePath: string;
   message: string;
 }
@@ -33,6 +34,10 @@ export interface VideoAnalysisResponse {
 
 // Structured feedback from Gemini (Competitive NSDA Standard)
 export interface DebateAnalysis {
+  /** Speech classification from heuristic and/or model analysis */
+  classification?: 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
+  /** Whether score caps were applied due to classification */
+  capsApplied?: boolean;
   overallScore: number;
   performanceTier: string;
   tournamentReady: boolean;
@@ -104,12 +109,73 @@ export interface SpeechStats {
   fillerCount: number;
 }
 
-// Response from /api/process-all
+/** Transcript integrity metadata for logging and suspicious activity detection */
+export interface TranscriptIntegrity {
+  wordCount: number;
+  charLen: number;
+  sha256: string;
+  isSuspicious: boolean;
+  suspiciousReason?: string;
+}
+
+/** Parse/repair metrics for tracking LLM output reliability */
+export interface ParseMetrics {
+  parseFailCount: number;
+  repairUsed: boolean;
+  rawOutput?: string;
+}
+
+/** Structured error details when analysis fails */
+export interface AnalysisErrorDetails {
+  type: 'parse_failure' | 'schema_validation' | 'model_error' | 'transcription_error';
+  message: string;
+  rawModelOutput?: string;
+}
+
+// Response from /api/process-all (initial queue response)
+export interface ProcessAllResponse {
+  jobId: string;
+  sessionId: string;
+  status: JobStatus;
+  progress: number;       // 0-100 progress percentage
+}
+
+// Job status types for async processing
+export type JobStatus = 'queued' | 'processing' | 'complete' | 'error';
+
+// Response from /api/analysis-status (polling endpoint)
+export interface AnalysisStatusResponse {
+  jobId: string;
+  sessionId: string;
+  status: JobStatus;
+  progress: number;       // 0-100 progress percentage
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  // Present when status is 'complete'
+  transcript?: string;
+  analysis?: DebateAnalysis;
+  isMock?: boolean;
+  // Present when status is 'error'
+  error?: string;
+}
+
+// Response from /api/process-all (legacy format for backward compatibility)
 export interface FeedbackResponse {
   sessionId: string;
   transcript: string;
   analysis?: DebateAnalysis;
   isMock?: boolean;
+  /** Present when analysis failed */
+  error?: string;
+  /** Structured error info when parsing/validation fails */
+  errorDetails?: AnalysisErrorDetails;
+  /** Transcript integrity metadata for logging */
+  transcriptIntegrity?: TranscriptIntegrity;
+  /** Parse/repair metrics */
+  parseMetrics?: ParseMetrics;
+  /** Warning about analysis quality (e.g., video compression failed, used audio-only) */
+  analysisWarning?: string;
 }
 
 // The different screens/steps in our practice flow

@@ -144,9 +144,13 @@ function App() {
   };
 
   // Push URL when step changes (but not on initial load or popstate)
-  const pushStepUrl = (step: FlowStep, sessionId?: string) => {
+  // For processing page, include sessionId and jobId in URL params for resilience
+  const pushStepUrl = (step: FlowStep, sessionId?: string, jobId?: string) => {
     if (step === 'ballot' && sessionId) {
       window.history.pushState(null, '', `/ballot/${sessionId}`);
+    } else if (step === 'processing' && sessionId && jobId) {
+      // Include session/job IDs in URL for page refresh resilience
+      window.history.pushState(null, '', `/processing?sessionId=${sessionId}&jobId=${jobId}`);
     } else {
       window.history.pushState(null, '', stepToPath[step]);
     }
@@ -198,7 +202,12 @@ function App() {
       } else if (path === '/processing') {
         setShowHistory(false);
         setShowLanding(false);
-        if (uploadResponse) setCurrentStep('processing');
+        // Allow processing step if we have uploadResponse OR URL has sessionId/jobId params
+        const params = new URLSearchParams(window.location.search);
+        const hasUrlParams = params.get('sessionId') && params.get('jobId');
+        if (uploadResponse || hasUrlParams) {
+          setCurrentStep('processing');
+        }
       } else if (path === '/report') {
         setShowHistory(false);
         setShowLanding(false);
@@ -314,13 +323,14 @@ function App() {
 
   /**
    * Called when the video upload is complete
-   * Move to processing step
+   * Move to processing step with URL params for resilience
    */
   const handleUploadComplete = (response: UploadResponse) => {
     console.log('📦 Upload complete (frontend):', response);
     setUploadResponse(response);
     setCurrentStep('processing');
-    pushStepUrl('processing');
+    // Navigate with sessionId and jobId in URL for page refresh resilience
+    pushStepUrl('processing', response.sessionId, response.jobId);
   };
 
   /**
@@ -516,13 +526,43 @@ function App() {
 
       case 'processing':
         // Show the processing screen
-        if (!uploadResponse || !roundData) return null;
+        // Allow rendering even without uploadResponse if URL has sessionId/jobId (page refresh case)
+        const processingParams = new URLSearchParams(window.location.search);
+        const hasProcessingParams = processingParams.get('sessionId') && processingParams.get('jobId');
+        
+        if (!uploadResponse && !hasProcessingParams) {
+          // Neither props nor URL params - can't proceed
+          return (
+            <div style={{ padding: '80px 24px', textAlign: 'center' }}>
+              <h2 style={{ color: '#111', marginBottom: '16px' }}>Session Not Found</h2>
+              <p style={{ color: '#666', marginBottom: '24px' }}>
+                We couldn't find the analysis session. The link may have expired.
+              </p>
+              <button 
+                onClick={handleGoHome}
+                style={{
+                  background: '#000',
+                  color: '#fff',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '1rem',
+                }}
+              >
+                Return to Dashboard
+              </button>
+            </div>
+          );
+        }
+        
         return (
           <UploadSuccess
             uploadResponse={uploadResponse}
-            theme={roundData.theme}
-            quote={selectedQuote}
+            theme={roundData?.theme || 'Unknown Theme'}
+            quote={selectedQuote || 'Quote not available'}
             onFeedbackReady={handleFeedbackReady}
+            onMissingParams={handleGoHome}
           />
         );
 

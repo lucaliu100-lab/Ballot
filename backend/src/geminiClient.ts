@@ -7,9 +7,88 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+
+// ===========================================
+// METRICS / INTEGRITY TRACKING
+// ===========================================
+
+/**
+ * Transcript integrity metadata for logging and suspicious activity detection
+ */
+export interface TranscriptIntegrity {
+  wordCount: number;
+  charLen: number;
+  sha256: string;
+  isSuspicious: boolean;
+  suspiciousReason?: string;
+}
+
+/**
+ * Parse/repair metrics for tracking LLM output reliability
+ */
+export interface ParseMetrics {
+  parseFailCount: number;
+  repairUsed: boolean;
+  rawOutput?: string;  // Stored when parse fails
+}
+
+// Simple in-memory sha256 frequency tracker (resets on server restart)
+// In production, this should be persisted to a database
+const sha256FrequencyMap = new Map<string, number>();
+const SHA256_REPEAT_THRESHOLD = 3; // Flag if same hash appears 3+ times
+
+/**
+ * Compute sha256 hash of a string
+ */
+function sha256(text: string): string {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * Compute transcript integrity metadata
+ */
+function computeTranscriptIntegrity(transcript: string): TranscriptIntegrity {
+  const text = String(transcript || '').trim();
+  const wordCount = countWords(text);
+  const charLen = text.length;
+  const hash = sha256(text);
+  
+  // Track hash frequency
+  const currentCount = (sha256FrequencyMap.get(hash) || 0) + 1;
+  sha256FrequencyMap.set(hash, currentCount);
+  
+  // Check for suspicious patterns
+  let isSuspicious = false;
+  let suspiciousReason: string | undefined;
+  
+  // Suspicious: same transcript hash repeating unusually often
+  if (currentCount >= SHA256_REPEAT_THRESHOLD) {
+    isSuspicious = true;
+    suspiciousReason = `Transcript hash repeated ${currentCount} times across sessions`;
+  }
+  
+  // Suspicious: very low word count for what should be speech
+  if (wordCount > 0 && wordCount < 25) {
+    isSuspicious = true;
+    suspiciousReason = suspiciousReason 
+      ? `${suspiciousReason}; Word count suspiciously low (${wordCount})`
+      : `Word count suspiciously low (${wordCount})`;
+  }
+  
+  // Suspicious: empty or near-empty transcript
+  if (charLen > 0 && charLen < 50) {
+    isSuspicious = true;
+    suspiciousReason = suspiciousReason
+      ? `${suspiciousReason}; Character count suspiciously low (${charLen})`
+      : `Character count suspiciously low (${charLen})`;
+  }
+  
+  return { wordCount, charLen, sha256: hash, isSuspicious, suspiciousReason };
+}
 
 // ===========================================
 // CONFIGURATION
@@ -44,6 +123,8 @@ export interface GeminiAnalysisResult {
   success: boolean;
   transcript: string;
   analysis?: {
+    classification: 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
+    capsApplied: boolean;
     overallScore: number;
     performanceTier: string;
     tournamentReady: boolean;
@@ -107,6 +188,18 @@ export interface GeminiAnalysisResult {
     nextSessionFocus: { primary: string; metric: string };
   };
   error?: string;
+  /** Structured error info when parsing/validation fails */
+  errorDetails?: {
+    type: 'parse_failure' | 'schema_validation' | 'model_error' | 'transcription_error';
+    message: string;
+    rawModelOutput?: string;
+  };
+  /** Transcript integrity metadata for logging */
+  transcriptIntegrity?: TranscriptIntegrity;
+  /** Parse/repair metrics */
+  parseMetrics?: ParseMetrics;
+  /** Warning about analysis quality (e.g., video compression failed, used audio-only) */
+  analysisWarning?: string;
 }
 
 // ===========================================
@@ -485,6 +578,353 @@ function enforceTournamentReadinessInPlace(analysis: any, durationSeconds: numbe
   analysis.performanceTier = computePerformanceTier(overall);
 }
 
+// ==============================
+// Classification-based hard caps enforcement (server-side truth)
+// ==============================
+
+type SpeechClassification = 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
+
+/**
+ * Deterministic heuristic classification of transcript quality BEFORE calling judge LLM.
+ * Returns classification + whether to skip LLM entirely + max score cap.
+ */
+interface HeuristicClassificationResult {
+  classification: SpeechClassification;
+  skipLLM: boolean;
+  maxOverallScore: number;
+  reason: string;
+}
+
+function classifyTranscriptHeuristic(
+  transcript: string,
+  theme: string,
+  quote: string
+): HeuristicClassificationResult {
+  const text = String(transcript || '').trim().toLowerCase();
+  const wordCount = countWords(transcript);
+  const charLen = text.length;
+  
+  // RULE 1: too_short if wordCount < 25
+  if (wordCount < 25) {
+    return {
+      classification: 'too_short',
+      skipLLM: true,
+      maxOverallScore: 2.5,
+      reason: `Transcript too short: ${wordCount} words (minimum 25 required)`,
+    };
+  }
+  
+  // RULE 2: cap overall <= 3.0 if wordCount < 75 (per Criteria)
+  // Don't skip LLM, but enforce cap
+  const lowWordCountCap = wordCount < 75;
+  
+  // RULE 3: nonsense detection via lexical diversity and n-gram repetition
+  const words = text.split(/\s+/).filter(Boolean);
+  const uniqueWords = new Set(words);
+  const lexicalDiversity = uniqueWords.size / words.length;
+  
+  // Check for high repetition of n-grams (bigrams and trigrams)
+  const bigrams: Record<string, number> = {};
+  const trigrams: Record<string, number> = {};
+  for (let i = 0; i < words.length - 1; i++) {
+    const bigram = `${words[i]} ${words[i + 1]}`;
+    bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+    if (i < words.length - 2) {
+      const trigram = `${words[i]} ${words[i + 1]} ${words[i + 2]}`;
+      trigrams[trigram] = (trigrams[trigram] || 0) + 1;
+    }
+  }
+  
+  // Count highly repeated n-grams (3+ repetitions)
+  const repeatedBigrams = Object.values(bigrams).filter(c => c >= 3).length;
+  const repeatedTrigrams = Object.values(trigrams).filter(c => c >= 3).length;
+  const totalNgrams = Object.keys(bigrams).length + Object.keys(trigrams).length;
+  const repetitionRatio = totalNgrams > 0 
+    ? (repeatedBigrams + repeatedTrigrams * 2) / totalNgrams 
+    : 0;
+  
+  // Check for non-words (strings that don't look like English)
+  // Simple heuristic: too many short repeated strings or strings with unusual characters
+  const nonWordPattern = /^[^aeiou]{5,}$|^(.)\1{3,}$/;
+  const nonWordCount = words.filter(w => nonWordPattern.test(w) || w.length > 20).length;
+  const nonWordRatio = nonWordCount / words.length;
+  
+  // Nonsense criteria: very low lexical diversity OR high n-gram repetition OR many non-words
+  if (lexicalDiversity < 0.15 && words.length > 50) {
+    return {
+      classification: 'nonsense',
+      skipLLM: true,
+      maxOverallScore: 2.5,
+      reason: `Very low lexical diversity (${(lexicalDiversity * 100).toFixed(1)}% unique words)`,
+    };
+  }
+  
+  if (repetitionRatio > 0.3 && words.length > 50) {
+    return {
+      classification: 'nonsense',
+      skipLLM: true,
+      maxOverallScore: 2.5,
+      reason: `High n-gram repetition detected (${(repetitionRatio * 100).toFixed(1)}% repeated patterns)`,
+    };
+  }
+  
+  if (nonWordRatio > 0.2 && words.length > 30) {
+    return {
+      classification: 'nonsense',
+      skipLLM: true,
+      maxOverallScore: 2.5,
+      reason: `High non-word ratio (${(nonWordRatio * 100).toFixed(1)}% non-words)`,
+    };
+  }
+  
+  // RULE 4: off_topic / mostly_off_topic detection via keyword overlap
+  // Extract keywords from theme and quote
+  const stopWords = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare',
+    'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
+    'into', 'through', 'during', 'before', 'after', 'above', 'below',
+    'between', 'under', 'again', 'further', 'then', 'once', 'here',
+    'there', 'when', 'where', 'why', 'how', 'all', 'each', 'few', 'more',
+    'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own',
+    'same', 'so', 'than', 'too', 'very', 'just', 'and', 'but', 'if', 'or',
+    'because', 'as', 'until', 'while', 'although', 'however', 'this',
+    'that', 'these', 'those', 'i', 'me', 'my', 'myself', 'we', 'our',
+    'ours', 'ourselves', 'you', 'your', 'yours', 'yourself', 'yourselves',
+    'he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'it',
+    'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+    'what', 'which', 'who', 'whom', 'whose', 'about', 'said', 'says',
+  ]);
+  
+  const extractKeywords = (input: string): Set<string> => {
+    return new Set(
+      input
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !stopWords.has(w))
+    );
+  };
+  
+  const themeKeywords = extractKeywords(theme);
+  const quoteKeywords = extractKeywords(quote);
+  const topicKeywords = new Set([...themeKeywords, ...quoteKeywords]);
+  const transcriptKeywords = extractKeywords(transcript);
+  
+  // Calculate keyword overlap
+  let overlapCount = 0;
+  for (const kw of topicKeywords) {
+    if (transcriptKeywords.has(kw)) overlapCount++;
+    // Also check for stemmed/partial matches (simple approach)
+    for (const tw of transcriptKeywords) {
+      if (tw.includes(kw) || kw.includes(tw)) {
+        overlapCount += 0.5;
+        break;
+      }
+    }
+  }
+  
+  const overlapRatio = topicKeywords.size > 0 
+    ? overlapCount / topicKeywords.size 
+    : 1; // If no topic keywords, assume on-topic
+  
+  // Off-topic: extremely low overlap
+  if (overlapRatio < 0.1 && topicKeywords.size >= 3 && words.length > 50) {
+    return {
+      classification: 'off_topic',
+      skipLLM: true,
+      maxOverallScore: 2.5,
+      reason: `Extremely low topic relevance (${(overlapRatio * 100).toFixed(1)}% keyword overlap)`,
+    };
+  }
+  
+  // Mostly off-topic: low overlap
+  if (overlapRatio < 0.25 && topicKeywords.size >= 3 && words.length > 50) {
+    return {
+      classification: 'mostly_off_topic',
+      skipLLM: false, // Let LLM judge, but cap scores
+      maxOverallScore: 6.0,
+      reason: `Low topic relevance (${(overlapRatio * 100).toFixed(1)}% keyword overlap)`,
+    };
+  }
+  
+  // Apply word count cap if needed
+  if (lowWordCountCap) {
+    return {
+      classification: 'normal',
+      skipLLM: false,
+      maxOverallScore: 3.0,
+      reason: `Low word count (${wordCount} words) - score capped`,
+    };
+  }
+  
+  // Normal speech
+  return {
+    classification: 'normal',
+    skipLLM: false,
+    maxOverallScore: 10.0,
+    reason: 'Transcript passes heuristic checks',
+  };
+}
+
+function detectSpeechClassification(transcript: string, durationSeconds: number, wordCount: number): SpeechClassification {
+  // too_short: under 60 seconds OR under 100 words
+  if (durationSeconds < 60 || wordCount < 100) {
+    return 'too_short';
+  }
+
+  // nonsense detection: check for coherence indicators
+  const words = transcript.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length < 50) return 'too_short';
+
+  // Count unique words ratio - word salad often has very low uniqueness due to repetition
+  const uniqueWords = new Set(words);
+  const uniqueRatio = uniqueWords.size / words.length;
+  
+  // Check for meaningful sentence connectors (not just periods)
+  const hasMeaningfulStructure = /\b(because|therefore|however|although|furthermore|consequently|moreover|thus|hence|since|as a result|in conclusion|first|second|third|finally)\b/i.test(transcript);
+  
+  // Check for repeated gibberish patterns: same word 3+ times in a row
+  const repeatedPattern = /(\b\w+\b)\s+\1\s+\1/gi;
+  const repetitionMatches = transcript.match(repeatedPattern) || [];
+  const hasExcessiveRepetition = repetitionMatches.length > 2;
+  
+  // Count how many unique words appear more than 5 times (over-repetition indicator)
+  const wordCounts: Record<string, number> = {};
+  for (const w of words) {
+    wordCounts[w] = (wordCounts[w] || 0) + 1;
+  }
+  const overRepeatedWords = Object.values(wordCounts).filter(c => c > 5).length;
+  const overRepetitionRatio = overRepeatedWords / uniqueWords.size;
+  
+  // Nonsense heuristics (any of these indicate nonsense):
+  // 1. Very low unique ratio (<20%) with over 100 words
+  if (uniqueRatio < 0.20 && words.length > 100) {
+    return 'nonsense';
+  }
+  
+  // 2. Excessive same-word repetition (>2 patterns of 3+ consecutive same words) without meaningful connectors
+  if (hasExcessiveRepetition && !hasMeaningfulStructure) {
+    return 'nonsense';
+  }
+  
+  // 3. High over-repetition ratio (>30% of unique words appear 5+ times) without meaningful structure
+  if (overRepetitionRatio > 0.30 && !hasMeaningfulStructure) {
+    return 'nonsense';
+  }
+
+  // Note: off_topic and mostly_off_topic require semantic analysis against the quote/theme
+  // The model performs this classification; we validate/enforce the caps server-side
+  return 'normal';
+}
+
+function enforceClassificationCapsInPlace(analysis: any, transcript: string, durationSeconds: number): void {
+  if (!analysis || typeof analysis !== 'object') return;
+
+  // Get model's classification or detect server-side
+  const wordCount = countWords(transcript);
+  const serverClassification = detectSpeechClassification(transcript, durationSeconds, wordCount);
+  
+  // Use model classification if provided and valid, otherwise use server detection
+  const validClassifications: SpeechClassification[] = ['normal', 'too_short', 'nonsense', 'off_topic', 'mostly_off_topic'];
+  let classification: SpeechClassification = 
+    validClassifications.includes(analysis.classification) ? analysis.classification : serverClassification;
+  
+  // Server-side override: if server detects too_short or nonsense, trust it over model
+  if (serverClassification === 'too_short' || serverClassification === 'nonsense') {
+    classification = serverClassification;
+  }
+
+  analysis.classification = classification;
+  
+  // Apply hard caps based on classification
+  const capAllScores = (maxScore: number) => {
+    const capScore = (obj: any, key: string) => {
+      if (obj && typeof obj[key] === 'object' && typeof obj[key].score === 'number') {
+        obj[key].score = Math.min(obj[key].score, maxScore);
+      }
+    };
+    
+    // Cap all subscores
+    if (analysis.contentAnalysis) {
+      capScore(analysis.contentAnalysis, 'topicAdherence');
+      capScore(analysis.contentAnalysis, 'argumentStructure');
+      capScore(analysis.contentAnalysis, 'depthOfAnalysis');
+      capScore(analysis.contentAnalysis, 'examplesEvidence');
+      capScore(analysis.contentAnalysis, 'timeManagement');
+    }
+    if (analysis.deliveryAnalysis) {
+      capScore(analysis.deliveryAnalysis, 'vocalVariety');
+      capScore(analysis.deliveryAnalysis, 'pacing');
+      capScore(analysis.deliveryAnalysis, 'articulation');
+      capScore(analysis.deliveryAnalysis, 'fillerWords');
+    }
+    if (analysis.languageAnalysis) {
+      capScore(analysis.languageAnalysis, 'vocabulary');
+      capScore(analysis.languageAnalysis, 'rhetoricalDevices');
+      capScore(analysis.languageAnalysis, 'emotionalAppeal');
+      capScore(analysis.languageAnalysis, 'logicalAppeal');
+    }
+    if (analysis.bodyLanguageAnalysis) {
+      capScore(analysis.bodyLanguageAnalysis, 'eyeContact');
+      capScore(analysis.bodyLanguageAnalysis, 'gestures');
+      capScore(analysis.bodyLanguageAnalysis, 'posture');
+      capScore(analysis.bodyLanguageAnalysis, 'stagePresence');
+    }
+  };
+
+  const capContentScores = (maxScore: number) => {
+    if (analysis.contentAnalysis) {
+      const capScore = (key: string) => {
+        if (analysis.contentAnalysis[key] && typeof analysis.contentAnalysis[key].score === 'number') {
+          analysis.contentAnalysis[key].score = Math.min(analysis.contentAnalysis[key].score, maxScore);
+        }
+      };
+      capScore('topicAdherence');
+      capScore('argumentStructure');
+      capScore('depthOfAnalysis');
+      capScore('examplesEvidence');
+      capScore('timeManagement');
+    }
+  };
+
+  let capsApplied = false;
+  let maxOverall = 10.0;
+
+  switch (classification) {
+    case 'too_short':
+    case 'nonsense':
+    case 'off_topic':
+      // Hard cap: overallScore max 2.5, all category scores ≤ 3.0
+      maxOverall = 2.5;
+      capAllScores(3.0);
+      capsApplied = true;
+      console.log(`   ⚠️ Classification "${classification}" detected. Hard cap applied: max overall 2.5`);
+      break;
+    
+    case 'mostly_off_topic':
+      // Hard cap: overallScore max 6.0, content scores ≤ 5.0
+      maxOverall = 6.0;
+      capContentScores(5.0);
+      capsApplied = true;
+      console.log(`   ⚠️ Classification "mostly_off_topic" detected. Hard cap applied: max overall 6.0`);
+      break;
+    
+    case 'normal':
+    default:
+      // No cap
+      break;
+  }
+
+  analysis.capsApplied = capsApplied;
+  
+  // Enforce the overall score cap after all other processing
+  if (capsApplied && typeof analysis.overallScore === 'number') {
+    analysis.overallScore = Math.min(analysis.overallScore, maxOverall);
+  }
+}
+
 function formatDurationSeconds(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   const mins = Math.floor(s / 60);
@@ -571,11 +1011,12 @@ async function encodeAudioToBase64(audioPath: string): Promise<string> {
 }
 
 function getTranscribeModelCandidates(primary: string | undefined, judgeModel: string): string[] {
+  // Use audio-capable models only. The judgeModel (Gemini) supports audio natively.
+  // Do NOT include openai/whisper-large-v3 - it's not a valid chat completion model on OpenRouter.
   const candidates = [
     primary,
     process.env.TRANSCRIBE_MODEL_FALLBACK,
-    // Widely supported on OpenRouter for audio transcription; safe default if not configured.
-    'openai/whisper-large-v3',
+    // Gemini models are audio-capable; use the judge model as fallback.
     judgeModel,
   ].filter((x): x is string => Boolean(x && String(x).trim()));
 
@@ -587,6 +1028,34 @@ function getTranscribeModelCandidates(primary: string | undefined, judgeModel: s
     return true;
   });
 }
+
+// ===========================================
+// LLM SAMPLING CONFIG (reduce stylistic collapse + determinism)
+// ===========================================
+
+function numEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+const TRANSCRIBE_SAMPLING = {
+  // Deterministic transcription.
+  temperature: numEnv('TRANSCRIBE_TEMPERATURE', 0),
+  top_p: numEnv('TRANSCRIBE_TOP_P', 1),
+  presence_penalty: 0,
+  frequency_penalty: 0,
+};
+
+const JUDGE_SAMPLING = {
+  // High enough to vary phrasing/structure, low enough to stay JSON-safe under strict schema.
+  temperature: numEnv('JUDGE_TEMPERATURE', 0.55),
+  top_p: numEnv('JUDGE_TOP_P', 0.92),
+  // Mild repetition discouragement (supported by OpenAI-style APIs; ignored if provider doesn’t implement).
+  presence_penalty: numEnv('JUDGE_PRESENCE_PENALTY', 0.35),
+  frequency_penalty: numEnv('JUDGE_FREQUENCY_PENALTY', 0.2),
+};
 
 async function getAudioDurationSeconds(audioPath: string): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
@@ -642,13 +1111,59 @@ async function splitAudioIntoChunks(audioPath: string, chunkSeconds: number): Pr
     .sort();
 }
 
+/**
+ * Result type for callOpenRouterJson with parse metrics
+ */
+interface OpenRouterJsonResult {
+  data: any;
+  parseMetrics: ParseMetrics;
+}
+
+/**
+ * Custom error for JSON parse failures - contains raw output for debugging
+ */
+class JsonParseError extends Error {
+  rawOutput: string;
+  parseFailCount: number;
+  repairAttempted: boolean;
+  
+  constructor(message: string, rawOutput: string, parseFailCount: number, repairAttempted: boolean) {
+    super(message);
+    this.name = 'JsonParseError';
+    this.rawOutput = rawOutput;
+    this.parseFailCount = parseFailCount;
+    this.repairAttempted = repairAttempted;
+  }
+}
+
 async function callOpenRouterJson(params: {
   apiKey: string;
   model: string;
-  content: any[];
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: any }>;
   maxTokens: number;
-}): Promise<any> {
-  const { apiKey, model, content, maxTokens } = params;
+  sampling?: {
+    temperature?: number;
+    top_p?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
+  };
+  /**
+   * Optional minimal schema hint used ONLY if JSON parsing fails.
+   * This is used to perform a deterministic "format-only" repair pass.
+   */
+  schemaForRepair?: string;
+}): Promise<OpenRouterJsonResult> {
+  const { apiKey, model, messages, maxTokens, sampling, schemaForRepair } = params;
+
+  const temperature = typeof sampling?.temperature === 'number' ? sampling.temperature : 0.1;
+  const top_p = typeof sampling?.top_p === 'number' ? sampling.top_p : undefined;
+  const presence_penalty = typeof sampling?.presence_penalty === 'number' ? sampling.presence_penalty : undefined;
+  const frequency_penalty = typeof sampling?.frequency_penalty === 'number' ? sampling.frequency_penalty : undefined;
+
+  const parseMetrics: ParseMetrics = {
+    parseFailCount: 0,
+    repairUsed: false,
+  };
 
   const controller = new AbortController();
   // Frontend timeout is 5 minutes; keep backend under that even with retry work.
@@ -665,9 +1180,12 @@ async function callOpenRouterJson(params: {
     },
     body: JSON.stringify({
       model,
-      messages: [{ role: 'user', content }],
+      messages,
       response_format: { type: 'json_object' },
-      temperature: 0.1,
+      temperature,
+      ...(typeof top_p === 'number' ? { top_p } : {}),
+      ...(typeof presence_penalty === 'number' ? { presence_penalty } : {}),
+      ...(typeof frequency_penalty === 'number' ? { frequency_penalty } : {}),
       max_tokens: maxTokens,
     }),
     signal: controller.signal,
@@ -765,53 +1283,92 @@ async function callOpenRouterJson(params: {
   };
 
   const parsed = tryParse(raw);
-  if (parsed) return parsed;
+  if (parsed) {
+    return { data: parsed, parseMetrics };
+  }
 
-  // One retry: ask the model to resend valid JSON only (escape newlines as \\n).
-  const retryController = new AbortController();
-  // Retry should be fast; it's only for formatting correction.
-  const retryTimeout = setTimeout(() => retryController.abort(), 90000);
-  const retryResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': process.env.PUBLIC_APP_URL || 'https://ballotv1.pages.dev',
-      'X-Title': 'Ballot Championship Coach',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'user', content },
-        {
-          role: 'user',
-          content:
-            'Your previous response was invalid JSON (likely raw newlines inside strings). ' +
-            'Return ONLY valid JSON. Escape all newlines inside strings as \\\\n.',
+  // First parse attempt failed
+  parseMetrics.parseFailCount = 1;
+  parseMetrics.rawOutput = raw;
+  console.warn(`⚠️ JSON parse failed (attempt 1). Raw output length: ${raw.length}`);
+
+  // Deterministic "format-only" repair pass.
+  // IMPORTANT: This must NOT re-run the original task with stronger constraints, otherwise it amplifies sameness.
+  if (schemaForRepair) {
+    parseMetrics.repairUsed = true;
+    console.log('   🔧 Attempting JSON repair pass...');
+    
+    const repairController = new AbortController();
+    // Repair should be fast; it's only for JSON formatting correction.
+    const repairTimeout = setTimeout(() => repairController.abort(), 90000);
+    
+    try {
+      const repairResp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.PUBLIC_APP_URL || 'https://ballotv1.pages.dev',
+          'X-Title': 'Ballot Championship Coach',
         },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      max_tokens: maxTokens,
-    }),
-    signal: retryController.signal,
-  });
-  clearTimeout(retryTimeout);
-  if (!retryResp.ok) {
-    const errorText = await retryResp.text().catch(() => 'No error body');
-    const err = new Error(`OpenRouter ${retryResp.status}: retry parse failed`);
-    (err as any).cause = errorText;
-    throw err;
-  }
-  const retryData = await retryResp.json();
-  const retryText = retryData.choices?.[0]?.message?.content;
-  if (typeof retryText === 'string' && retryText.trim()) {
-    const parsedRetry = tryParse(retryText);
-    if (parsedRetry) return parsedRetry;
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a JSON repair utility. Fix formatting ONLY. ' +
+                'Do not change meanings, scores, quotes, or time ranges. ' +
+                'Output MUST be a single valid JSON object and nothing else.',
+            },
+            {
+              role: 'user',
+              content:
+                `Target JSON shape (keys must match; no extra keys):\n${schemaForRepair}\n\n` +
+                `Invalid model output to repair:\n${raw}`,
+            },
+          ],
+          response_format: { type: 'json_object' },
+          // Make repair deterministic and non-stylistic.
+          temperature: 0,
+          top_p: 1,
+          max_tokens: maxTokens,
+        }),
+        signal: repairController.signal,
+      });
+      clearTimeout(repairTimeout);
+      
+      if (repairResp.ok) {
+        const repairData = await repairResp.json();
+        const repairText = repairData.choices?.[0]?.message?.content;
+        if (typeof repairText === 'string' && repairText.trim()) {
+          const parsedRepair = tryParse(repairText);
+          if (parsedRepair) {
+            console.log('   ✅ JSON repair successful');
+            return { data: parsedRepair, parseMetrics };
+          }
+        }
+      }
+      
+      // Repair failed - increment fail count
+      parseMetrics.parseFailCount = 2;
+      console.warn('   ❌ JSON repair failed');
+    } catch (repairError) {
+      clearTimeout(repairTimeout);
+      parseMetrics.parseFailCount = 2;
+      const repairMsg = repairError instanceof Error ? repairError.message : String(repairError);
+      console.warn(`   ❌ JSON repair error: ${repairMsg}`);
+    }
   }
 
+  // DO NOT return default scores or cached analysis - throw error with raw output
   const snippet = raw.slice(0, 500);
-  throw new Error(`Model returned non-JSON content. First 500 chars: ${snippet}`);
+  throw new JsonParseError(
+    `Model returned non-JSON content. First 500 chars: ${snippet}`,
+    raw,
+    parseMetrics.parseFailCount,
+    parseMetrics.repairUsed
+  );
 }
 
 function buildInsufficientSpeechAnalysis(durationSeconds: number, reason: string): NonNullable<GeminiAnalysisResult['analysis']> {
@@ -820,6 +1377,8 @@ function buildInsufficientSpeechAnalysis(durationSeconds: number, reason: string
   const feedback = `**Score Justification:** ${warning}\n\n**Evidence from Speech:**\n- Transcript is empty or too short to evaluate.\n\n**What This Means:** We cannot fairly score competitive impromptu categories without audible speech and a usable transcript.\n\n**How to Improve:**\n1. Re-record ensuring microphone permissions are enabled and audio is captured clearly.\n2. Speak continuously for competitive length (4–6 minutes optimal) instead of extended silence.\n3. Test a 10-second recording and confirm playback has clear audio before starting a full round.`;
 
   return {
+    classification: 'too_short',
+    capsApplied: true,
     overallScore: 1.0,
     performanceTier: 'Developing',
     tournamentReady: false,
@@ -1299,15 +1858,41 @@ export async function analyzeSpeechWithGemini(
 
     console.log(`   🎞️  Video duration (best available): ${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'}`);
 
+    // ----------------------------
+    // TASK D: Video processing with ffmpeg fallback
+    // ----------------------------
     // Reliability: large videos often exceed gateway limits when Base64-encoded.
     // If file is large, transcode to a smaller MP4 before encoding.
     const originalSizeMb = await statSizeMB(input.videoPath);
     let videoPathForAnalysis = input.videoPath;
+    let analysisWarning: string | undefined;
+    let useVideoForAnalysis = true; // Track if we can use video at all
+    
+    const VIDEO_SIZE_LIMIT_MB = 20; // Max size to attempt video analysis without compression
+    
     if (originalSizeMb > 12) {
       console.warn(`⚠️ Large video (${originalSizeMb.toFixed(2)}MB) detected. Creating compressed analysis copy...`);
-      videoPathForAnalysis = await transcodeVideoForAnalysis(input.videoPath);
-      const compressedSizeMb = await statSizeMB(videoPathForAnalysis);
-      console.log(`   ✅ Compressed video ready: ${compressedSizeMb.toFixed(2)}MB (${path.basename(videoPathForAnalysis)})`);
+      try {
+        videoPathForAnalysis = await transcodeVideoForAnalysis(input.videoPath);
+        const compressedSizeMb = await statSizeMB(videoPathForAnalysis);
+        console.log(`   ✅ Compressed video ready: ${compressedSizeMb.toFixed(2)}MB (${path.basename(videoPathForAnalysis)})`);
+      } catch (transcodeError) {
+        const transcodeMsg = transcodeError instanceof Error ? transcodeError.message : String(transcodeError);
+        console.error(`❌ ffmpeg transcode failed: ${transcodeMsg}`);
+        
+        // TASK D Fallback: try original video if size <= limit
+        if (originalSizeMb <= VIDEO_SIZE_LIMIT_MB) {
+          console.log(`   🔄 Fallback: Using original video (${originalSizeMb.toFixed(2)}MB <= ${VIDEO_SIZE_LIMIT_MB}MB limit)`);
+          videoPathForAnalysis = input.videoPath;
+          analysisWarning = `Video compression failed; using original video. Analysis may be less detailed.`;
+        } else {
+          // Original too large - fall back to audio-only analysis
+          console.log(`   🔄 Fallback: Original video too large (${originalSizeMb.toFixed(2)}MB > ${VIDEO_SIZE_LIMIT_MB}MB). Will use audio-only analysis.`);
+          videoPathForAnalysis = input.videoPath; // Keep for audio extraction
+          useVideoForAnalysis = false;
+          analysisWarning = `Video compression failed and original too large. Using audio-only analysis; body language scores are estimates.`;
+        }
+      }
     }
 
     // Inspect streams to validate that the recording actually has audio.
@@ -1361,30 +1946,44 @@ Rules:
     const tryTranscribeBase64WithModel = async (model: string, b64: string): Promise<string> => {
       // Try OpenAI-style audio part first.
       try {
-        const t = await callOpenRouterJson({
+        const result = await callOpenRouterJson({
           apiKey,
           model,
-          content: [
-            { type: 'text', text: transcribePrompt },
-            { type: 'input_audio', input_audio: { data: b64, format: 'wav' } },
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: transcribePrompt },
+                { type: 'input_audio', input_audio: { data: b64, format: 'wav' } },
+              ],
+            },
           ],
           maxTokens: 4000, // Increased from 2500 to handle longer speeches
+          sampling: TRANSCRIBE_SAMPLING,
+          schemaForRepair: `{"transcript":"<full transcribed text>"}`,
         });
-        return typeof t?.transcript === 'string' ? t.transcript : '';
+        return typeof result.data?.transcript === 'string' ? result.data.transcript : '';
       } catch (e) {
         // Fallback: some providers expect audio_url data URL
         const msg = e instanceof Error ? e.message : String(e);
         console.warn(`⚠️ input_audio transcription failed for model=${model} (${msg}). Retrying with audio_url...`);
-        const t = await callOpenRouterJson({
+        const result = await callOpenRouterJson({
           apiKey,
           model,
-          content: [
-            { type: 'text', text: transcribePrompt },
-            { type: 'audio_url', audio_url: { url: `data:audio/wav;base64,${b64}` } },
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: transcribePrompt },
+                { type: 'audio_url', audio_url: { url: `data:audio/wav;base64,${b64}` } },
+              ],
+            },
           ],
           maxTokens: 4000, // Increased from 2500 to handle longer speeches
+          sampling: TRANSCRIBE_SAMPLING,
+          schemaForRepair: `{"transcript":"<full transcribed text>"}`,
         });
-        return typeof t?.transcript === 'string' ? t.transcript : '';
+        return typeof result.data?.transcript === 'string' ? result.data.transcript : '';
       }
     };
 
@@ -1451,7 +2050,43 @@ Rules:
       }
     }
 
-    // If transcript is too short, return guarded analysis early.
+    // ----------------------------
+    // TASK A: Compute transcript integrity metadata
+    // ----------------------------
+    const transcriptIntegrity = computeTranscriptIntegrity(transcript);
+    console.log(`   🔐 Transcript integrity: wordCount=${transcriptIntegrity.wordCount}, charLen=${transcriptIntegrity.charLen}, sha256=${transcriptIntegrity.sha256.slice(0, 16)}...`);
+    if (transcriptIntegrity.isSuspicious) {
+      console.warn(`   ⚠️ SUSPICIOUS TRANSCRIPT: ${transcriptIntegrity.suspiciousReason}`);
+    }
+
+    // ----------------------------
+    // TASK B: Deterministic heuristic pre-check BEFORE judge LLM
+    // ----------------------------
+    const heuristicResult = classifyTranscriptHeuristic(transcript, input.theme, input.quote);
+    console.log(`   🔍 Heuristic classification: ${heuristicResult.classification} (skipLLM=${heuristicResult.skipLLM}, maxScore=${heuristicResult.maxOverallScore})`);
+    if (heuristicResult.reason !== 'Transcript passes heuristic checks') {
+      console.log(`      Reason: ${heuristicResult.reason}`);
+    }
+
+    // If heuristic says skip LLM, return guarded analysis immediately
+    if (heuristicResult.skipLLM) {
+      const durationSecondsActual =
+        durationSeconds && durationSeconds > 0 ? durationSeconds : (input.durationSecondsHint || 0);
+      const analysis = buildInsufficientSpeechAnalysis(durationSecondsActual, heuristicResult.reason);
+      analysis.classification = heuristicResult.classification;
+      analysis.capsApplied = true;
+      analysis.overallScore = Math.min(analysis.overallScore, heuristicResult.maxOverallScore);
+      
+      console.warn(`⚠️ Heuristic pre-check failed. Returning guarded analysis. Classification: ${heuristicResult.classification}`);
+      return {
+        success: true,
+        transcript,
+        analysis,
+        transcriptIntegrity,
+      };
+    }
+
+    // Legacy check for backward compatibility (transcript too short)
     if (transcriptWordCount < 25) {
       const reason =
         transcriptWordCount === 0
@@ -1464,6 +2099,7 @@ Rules:
         success: true,
         transcript,
         analysis: buildInsufficientSpeechAnalysis(durationSecondsActual, reason),
+        transcriptIntegrity,
       };
     }
 
@@ -1472,8 +2108,10 @@ Rules:
     // ----------------------------
     // Video payloads can massively increase latency/cost for longer recordings.
     // Default: include video only up to MAX_VIDEO_SECONDS_FOR_ANALYSIS (180s) unless explicitly disabled.
+    // Also skip video if useVideoForAnalysis=false (TASK D fallback)
     const maxVideoSeconds = Number(process.env.MAX_VIDEO_SECONDS_FOR_ANALYSIS || 180);
     const includeVideo =
+      useVideoForAnalysis &&  // TASK D: respect ffmpeg fallback flag
       process.env.INCLUDE_VIDEO_IN_ANALYSIS !== 'false' &&
       durationSeconds > 0 &&
       Number.isFinite(maxVideoSeconds) &&
@@ -1483,160 +2121,280 @@ Rules:
     if (base64Video) {
       console.log(`   📹 Video encoded (Base64 length: ${base64Video.length})`);
     } else {
-      console.log(
-        `   📹 Video omitted (${process.env.INCLUDE_VIDEO_IN_ANALYSIS === 'false' ? 'INCLUDE_VIDEO_IN_ANALYSIS=false' : `duration>${Number.isFinite(maxVideoSeconds) ? maxVideoSeconds : 180}s`})`
-      );
+      const reason = !useVideoForAnalysis 
+        ? 'ffmpeg fallback (audio-only)'
+        : process.env.INCLUDE_VIDEO_IN_ANALYSIS === 'false' 
+          ? 'INCLUDE_VIDEO_IN_ANALYSIS=false' 
+          : `duration>${Number.isFinite(maxVideoSeconds) ? maxVideoSeconds : 180}s`;
+      console.log(`   📹 Video omitted (${reason})`);
     }
 
     const transcriptTimecoded = buildEstimatedTimecodedTranscript(transcript, durationSeconds, 36);
 
-    const judgePrompt = `
-You are a professional NSDA impromptu judge for BALLOT, an elite debate training platform.
-Analyze this competitive impromptu speech with surgical precision and nuanced detail.
+        const judgePrompt = `
+You are a professional NSDA impromptu judge for BALLOT.
 
-YOUR FEEDBACK PHILOSOPHY:
-- Be specific and actionable, not generic. Reference exact moments and phrases from the speech.
-- Explain WHY something works or doesn't work, not just WHAT the speaker did.
-- Differentiate subtle performance differences: a 7.3 should feel meaningfully different from a 7.6.
-- Provide rich, detailed feedback that helps the speaker understand exactly how to improve.
-- Be encouraging but honest. Point out both strengths AND specific weaknesses.
+═══════════════════════════════════════════════════════════════════════════════
+STEP 0: CLASSIFY THE SPEECH (MANDATORY FIRST STEP)
+═══════════════════════════════════════════════════════════════════════════════
+Before scoring, you MUST classify the speech into ONE of these categories:
 
-NSDA-CALIBRATED RUBRIC (MUST FOLLOW):
-- Scoring is 0.0–10.0 (one decimal). This corresponds to NSDA 30-point speaker points mapping:
-  - 8.0–8.5 is an average competitive high school debater (roughly 24–25.5 NSDA).
-  - 9.0+ is rare and indicates finals-caliber execution.
-- LENGTH PENALTIES (applied to Content score):
-  - <3:00 → -2.0 + flag "⚠️ INSUFFICIENT LENGTH"
-  - 3:00–3:59 → -1.0 + note "Below optimal range"
-  - 4:00–6:00 → no penalty (optimal)
-  - >7:00 → -0.5 to Time Management + flag "⚠️ EXCEEDS LIMIT"
-- WEIGHTED FORMULA:
-  Overall = (Content × 0.40) + (Delivery × 0.30) + (Language × 0.15) + (Body Language × 0.15)
-- Tournament readiness criteria (set tournamentReady=true ONLY if all hold):
-  - overallScore ≥ 7.5
-  - no category score < 7.0
-  - speech length 4:00–7:00
-  - filler rate < 8/min
-  - eye contact > 50%
+- "normal": Coherent speech addressing the topic with identifiable structure
+- "too_short": Speech under 60 seconds OR transcript under 100 words
+- "nonsense": Word salad, random words, gibberish, incoherent rambling with no logical thread
+- "off_topic": Speech is coherent but completely ignores the quote/theme (discusses unrelated subject)
+- "mostly_off_topic": Speech has minimal connection to quote/theme (>70% off-topic content)
 
+HARD SCORE CAPS BY CLASSIFICATION:
+- "too_short" / "nonsense" / "off_topic" → overallScore MAXIMUM 2.5 (all category scores ≤ 3.0)
+- "mostly_off_topic" → overallScore MAXIMUM 6.0 (content scores ≤ 5.0)
+- "normal" → No cap; score using full rubric
+
+Set capsApplied=true if any cap was enforced, false otherwise.
+
+═══════════════════════════════════════════════════════════════════════════════
+SCORING BANDS (NSDA-calibrated, use full 0–10 range)
+═══════════════════════════════════════════════════════════════════════════════
+9.0–10.0: Finals-caliber; exceptional execution, flawless structure, original insights
+8.0–8.9:  Breaking rounds; solid competitive performance, clear strengths
+7.0–7.9:  Competitive; functional structure, adequate analysis, some weaknesses  
+5.0–6.9:  Developing; noticeable gaps in structure, depth, or delivery
+3.0–4.9:  Significant problems; major fundamental issues
+0.0–2.9:  Minimal skill demonstration; incoherent, off-topic, or severely deficient
+
+LENGTH PENALTIES (apply to Content score BEFORE weighted calculation):
+- <3:00 → -2.0 + flag "⚠️ INSUFFICIENT LENGTH"
+- 3:00–3:59 → -1.0 + note "Below optimal range"
+- 4:00–6:00 → no penalty (optimal)
+- >7:00 → -0.5 to Time Management + flag "⚠️ EXCEEDS LIMIT"
+
+WEIGHTED FORMULA:
+Overall = (Content × 0.40) + (Delivery × 0.30) + (Language × 0.15) + (Body Language × 0.15)
+
+tournamentReady=true ONLY if: overallScore ≥ 7.5 AND all categories ≥ 7.0 AND length 4:00–7:00 AND fillers < 8/min AND eye contact > 50%
+
+═══════════════════════════════════════════════════════════════════════════════
+INPUT DATA
+═══════════════════════════════════════════════════════════════════════════════
 THEME: ${input.theme}
 QUOTE: ${input.quote}
-VIDEO_DURATION_SECONDS (best available): ${Math.round(durationSeconds)}
-VIDEO_DURATION (mm:ss, best available): ${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'}
+DURATION: ${Math.round(durationSeconds)}s (${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'})
 
-TRANSCRIPT (verbatim, do not invent beyond this):
+TRANSCRIPT (with estimated time-codes):
 """
-${transcript}
-"""
-
-TRANSCRIPT WITH ESTIMATED TIME-CODES (USE THESE FOR ALL TIME RANGES):
-${transcriptTimecoded ? `"""` : '""'}
 ${transcriptTimecoded}
-${transcriptTimecoded ? `"""` : '""'}
+"""
 
-CRITICAL ANTI-HALLUCINATION RULES (MUST FOLLOW):
-- Do NOT invent transcript content, evidence, timestamps, or structure.
-- Use the transcript for all evidence quotes.
-- For time ranges, ONLY use the bracketed time ranges provided in TRANSCRIPT WITH ESTIMATED TIME-CODES.
-- If transcript is too short, say so explicitly and return minimal evaluation.
+═══════════════════════════════════════════════════════════════════════════════
+SCORING PROCEDURE (FOLLOW THIS ORDER)
+═══════════════════════════════════════════════════════════════════════════════
+1. CLASSIFY first (Step 0 above). Set "classification" field.
+2. If classification triggers a cap, apply it. Set "capsApplied" accordingly.
+3. For each metric: decide score FIRST based on evidence, THEN write feedback justifying that score.
+4. Scores MUST vary: if performance differs across metrics, scores MUST differ by ≥0.5 points.
+5. Typical spread: scores should range 2+ points (e.g., 5.8 to 8.2). Flat distributions indicate scoring failure.
 
-FEEDBACK FORMAT RULE (CRITICAL - MUST FOLLOW FOR EVERY feedback STRING):
-Every "feedback" field in the JSON MUST include ALL FOUR sections below with these EXACT headers. Do NOT skip any section. Do NOT rename headers.
+ANTI-HALLUCINATION: Use ONLY quotes and time ranges from the transcript above. Do NOT invent content.
 
-**Score Justification:** 3–5 sentences analyzing what worked and what did not. Explain WHY this exact score (with decimal) was earned. Reference specific competitive standards.
+═══════════════════════════════════════════════════════════════════════════════
+FEEDBACK FORMAT REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+Every "feedback" field MUST contain exactly 4 sections with EXACTLY 2 evidence bullets:
 
+**Score Justification:** Why this score, not higher/lower. Reference competitive standard.
 **Evidence from Speech:**
-- 'exact quote from transcript' [m:ss-m:ss] — what this demonstrates
-- 'another quote' [m:ss-m:ss] — why this matters
-- 'third quote' [m:ss-m:ss] — technique or missed opportunity
-
-**What This Means:** 2–3 sentences on competitive implications. How would a tournament judge perceive this? What skill level does it indicate?
-
+- 'exact quote from transcript' [m:ss-m:ss] — why it matters
+- 'exact quote from transcript' [m:ss-m:ss] — why it matters
+**What This Means:** Competitive implications (2 sentences max).
 **How to Improve:**
-1. Specific drill with clear instructions
-2. Concrete technique to implement immediately
-3. Practice exercise with measurable goal
+1. Specific drill
+2. Technique to implement
+3. Measurable goal
 
-EXAMPLE OF A COMPLETE feedback STRING (follow this exact structure):
-"**Score Justification:** The speaker demonstrates solid topic adherence with a clear thesis connecting to the quote. However, the linkage becomes weaker in the second body point where tangential examples dilute focus. Score of 7.4 reflects competent connection with room for tighter integration.\\n\\n**Evidence from Speech:**\\n- 'This quote teaches us that true freedom requires responsibility' [0:15-0:22] — Strong thesis with clear interpretation\\n- 'For example, my uncle once said' [1:45-2:10] — Personal anecdote that drifts from thesis\\n- 'In conclusion freedom matters' [4:02-4:15] — Rushed conclusion without quote callback\\n\\n**What This Means:** A judge would note the solid opening but mark down for mid-speech drift. This indicates developing-level quote integration typical of local competitors moving toward regional success.\\n\\n**How to Improve:**\\n1. Write your thesis on paper during prep and check each point against it\\n2. End each body paragraph with one sentence linking back to the quote\\n3. Practice 3 speeches with forced 10-second conclusions that reference the prompt"
+CONSTRAINTS:
+- Each feedback string: MAX 700 characters total
+- Do NOT reuse any 10+ word phrase across different feedback fields
+- Use single quotes for transcript quotes inside JSON strings
 
-JSON VALIDITY RULE (CRITICAL):
-- The entire response must be valid JSON.
-- Do NOT include raw line breaks or unescaped quotes inside JSON strings.
-- NEVER use the " character inside any feedback text. If you must quote the speaker, use single quotes instead.
+═══════════════════════════════════════════════════════════════════════════════
+JSON OUTPUT RULES
+═══════════════════════════════════════════════════════════════════════════════
+- Return ONLY valid JSON. No markdown, no code fences, no commentary.
+- All scores: one decimal (e.g., 6.3, 8.7). Never whole numbers. Never 0–100 scale.
+- categoryScores.*.weighted = score × weight. overallScore = sum of weighted.
+- CRITICAL: Example values below are INVALID PLACEHOLDERS (all 0.0). NEVER copy scores from examples.
+  You MUST compute your own scores based on the actual transcript evidence.
 
-SCORING RULES:
-- ALL scores MUST use one decimal place (e.g., 7.3, 8.1, 6.5). Never use whole numbers like 7 or 8. Never use 0–100.
-- Be precise and nuanced: use the full range of decimals (7.1, 7.2, 7.3... 7.9) to differentiate performance levels.
-- categoryScores.*.weighted must equal score * weight.
-- overallScore must equal the sum of the four weighted category scores.
-
-Return ONLY valid JSON matching this structure (NO transcript field; transcript is provided above):
 {
-  "overallScore": 7.4,
-  "performanceTier": "string",
+  "classification": "normal",
+  "capsApplied": false,
+  "overallScore": 0.0,
+  "performanceTier": "Developing",
   "tournamentReady": false,
   "categoryScores": {
-    "content": {"score": 7.2, "weight": 0.40, "weighted": 2.88},
-    "delivery": {"score": 7.5, "weight": 0.30, "weighted": 2.25},
-    "language": {"score": 7.8, "weight": 0.15, "weighted": 1.17},
-    "bodyLanguage": {"score": 7.3, "weight": 0.15, "weighted": 1.10}
+    "content": {"score": 0.0, "weight": 0.40, "weighted": 0.0},
+    "delivery": {"score": 0.0, "weight": 0.30, "weighted": 0.0},
+    "language": {"score": 0.0, "weight": 0.15, "weighted": 0.0},
+    "bodyLanguage": {"score": 0.0, "weight": 0.15, "weighted": 0.0}
   },
   "contentAnalysis": {
-    "topicAdherence": {"score": 7.4, "feedback": "string"},
-    "argumentStructure": {"score": 7.1, "feedback": "string"},
-    "depthOfAnalysis": {"score": 6.8, "feedback": "string"},
-    "examplesEvidence": {"score": 7.3, "feedback": "string"},
-    "timeManagement": {"score": 7.5, "feedback": "string"}
+    "topicAdherence": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "argumentStructure": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "depthOfAnalysis": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "examplesEvidence": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "timeManagement": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"}
   },
   "deliveryAnalysis": {
-    "vocalVariety": {"score": 7.6, "feedback": "string"},
-    "pacing": {"score": 7.2, "wpm": 145, "feedback": "string"},
-    "articulation": {"score": 7.8, "feedback": "string"},
-    "fillerWords": {"score": 8.1, "total": 8, "perMinute": 1.8, "breakdown": {}, "feedback": "string"}
+    "vocalVariety": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "pacing": {"score": 0.0, "wpm": 0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "articulation": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "fillerWords": {"score": 0.0, "total": 0, "perMinute": 0.0, "breakdown": {}, "feedback": "YOUR_ASSESSMENT_HERE"}
   },
   "languageAnalysis": {
-    "vocabulary": {"score": 7.5, "feedback": "string"},
-    "rhetoricalDevices": {"score": 6.9, "examples": [], "feedback": "string"},
-    "emotionalAppeal": {"score": 7.7, "feedback": "string"},
-    "logicalAppeal": {"score": 7.4, "feedback": "string"}
+    "vocabulary": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "rhetoricalDevices": {"score": 0.0, "examples": [], "feedback": "YOUR_ASSESSMENT_HERE"},
+    "emotionalAppeal": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "logicalAppeal": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"}
   },
   "bodyLanguageAnalysis": {
-    "eyeContact": {"score": 7.2, "percentage": 72, "feedback": "string"},
-    "gestures": {"score": 7.1, "feedback": "string"},
-    "posture": {"score": 7.6, "feedback": "string"},
-    "stagePresence": {"score": 7.3, "feedback": "string"}
+    "eyeContact": {"score": 0.0, "percentage": 0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "gestures": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "posture": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"},
+    "stagePresence": {"score": 0.0, "feedback": "YOUR_ASSESSMENT_HERE"}
   },
   "speechStats": {
-    "duration": "string",
+    "duration": "0:00",
     "wordCount": 0,
     "wpm": 0,
     "fillerWordCount": 0,
-    "fillerWordRate": 0
+    "fillerWordRate": 0.0
   },
   "structureAnalysis": {
-    "introduction": {"timeRange": "string", "assessment": "string"},
-    "bodyPoints": [{"timeRange": "string", "assessment": "string"}],
-    "conclusion": {"timeRange": "string", "assessment": "string"}
+    "introduction": {"timeRange": "0:00-0:00", "assessment": "YOUR_ASSESSMENT_HERE"},
+    "bodyPoints": [],
+    "conclusion": {"timeRange": "0:00-0:00", "assessment": "YOUR_ASSESSMENT_HERE"}
   },
-  "priorityImprovements": [{"priority": 1, "issue": "string", "action": "string", "impact": "string"}],
-  "strengths": ["string"],
-  "practiceDrill": "string",
-  "nextSessionFocus": {"primary": "string", "metric": "string"}
+  "priorityImprovements": [],
+  "strengths": [],
+  "practiceDrill": "YOUR_DRILL_HERE",
+  "nextSessionFocus": {"primary": "YOUR_FOCUS_HERE", "metric": "YOUR_METRIC_HERE"}
 }
     `.trim();
 
-    const analysis = await callOpenRouterJson({
-      apiKey,
-      model: modelName,
-      content: base64Video
-        ? [
-            { type: 'text', text: judgePrompt },
-            { type: 'video_url', video_url: { url: base64Video } },
-          ]
-        : [{ type: 'text', text: judgePrompt }],
-      maxTokens: 7000,
-    });
+        // Schema for repair pass - uses type hints only, NOT literal "string" values
+        // The repair pass should preserve original content from the model, only fixing JSON syntax
+        const analysisSchemaForRepair = `{
+  "classification": <"normal"|"too_short"|"nonsense"|"off_topic"|"mostly_off_topic">,
+  "capsApplied": <boolean>,
+  "overallScore": <number 0.0-10.0>,
+  "performanceTier": <"Developing"|"Competitive"|"Breaking"|"Finals">,
+  "tournamentReady": <boolean>,
+  "categoryScores": {
+    "content": {"score": <number>, "weight": 0.40, "weighted": <number>},
+    "delivery": {"score": <number>, "weight": 0.30, "weighted": <number>},
+    "language": {"score": <number>, "weight": 0.15, "weighted": <number>},
+    "bodyLanguage": {"score": <number>, "weight": 0.15, "weighted": <number>}
+  },
+  "contentAnalysis": {
+    "topicAdherence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "argumentStructure": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "depthOfAnalysis": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "examplesEvidence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "timeManagement": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+  },
+  "deliveryAnalysis": {
+    "vocalVariety": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "pacing": {"score": <number>, "wpm": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "articulation": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "fillerWords": {"score": <number>, "total": <number>, "perMinute": <number>, "breakdown": <object>, "feedback": <detailed feedback string max 700 chars>}
+  },
+  "languageAnalysis": {
+    "vocabulary": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "rhetoricalDevices": {"score": <number>, "examples": <array of strings>, "feedback": <detailed feedback string max 700 chars>},
+    "emotionalAppeal": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "logicalAppeal": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+  },
+  "bodyLanguageAnalysis": {
+    "eyeContact": {"score": <number>, "percentage": <number 0-100>, "feedback": <detailed feedback string max 700 chars>},
+    "gestures": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "posture": {"score": <number>, "feedback": <detailed feedback string max 700 chars>},
+    "stagePresence": {"score": <number>, "feedback": <detailed feedback string max 700 chars>}
+  },
+  "speechStats": {
+    "duration": <string like "4:32">,
+    "wordCount": <number>,
+    "wpm": <number>,
+    "fillerWordCount": <number>,
+    "fillerWordRate": <number>
+  },
+  "structureAnalysis": {
+    "introduction": {"timeRange": <string like "0:00-0:35">, "assessment": <string>},
+    "bodyPoints": [{"timeRange": <string>, "assessment": <string>}],
+    "conclusion": {"timeRange": <string>, "assessment": <string>}
+  },
+  "priorityImprovements": [{"priority": <number>, "issue": <string>, "action": <string>, "impact": <string>}],
+  "strengths": [<string>, ...],
+  "practiceDrill": <string>,
+  "nextSessionFocus": {"primary": <string>, "metric": <string>}
+}`;
+
+    // Track parse metrics for the judge call
+    let parseMetrics: ParseMetrics = { parseFailCount: 0, repairUsed: false };
+    let analysis: any;
+    
+    try {
+      const judgeResult = await callOpenRouterJson({
+        apiKey,
+        model: modelName,
+        messages: [
+          {
+            role: 'user',
+            content: base64Video
+              ? [
+                  { type: 'text', text: judgePrompt },
+                  { type: 'video_url', video_url: { url: base64Video } },
+                ]
+              : [{ type: 'text', text: judgePrompt }],
+          },
+        ],
+        maxTokens: 7000,
+        sampling: JUDGE_SAMPLING,
+        schemaForRepair: analysisSchemaForRepair,
+      });
+      
+      analysis = judgeResult.data;
+      parseMetrics = judgeResult.parseMetrics;
+      
+      if (parseMetrics.repairUsed) {
+        console.log(`   🔧 Parse repair was used for judge output`);
+      }
+    } catch (judgeError) {
+      // TASK C: Handle JSON parse failure - DO NOT return default scores
+      if (judgeError instanceof JsonParseError) {
+        console.error(`❌ Judge LLM returned invalid JSON (parseFailCount=${judgeError.parseFailCount}, repairAttempted=${judgeError.repairAttempted})`);
+        console.error(`   Raw output preview: ${judgeError.rawOutput.slice(0, 200)}...`);
+        
+        return {
+          success: false,
+          transcript,
+          error: 'Analysis failed: Model returned invalid JSON that could not be parsed or repaired.',
+          errorDetails: {
+            type: 'parse_failure',
+            message: judgeError.message,
+            rawModelOutput: judgeError.rawOutput,
+          },
+          transcriptIntegrity,
+          parseMetrics: {
+            parseFailCount: judgeError.parseFailCount,
+            repairUsed: judgeError.repairAttempted,
+            rawOutput: judgeError.rawOutput,
+          },
+        };
+      }
+      
+      // Re-throw other errors
+      throw judgeError;
+    }
 
     // Normalize any model-returned scoring scale quirks (0–100 or 0–1) and recompute weighted totals.
     normalizeAnalysisScoringInPlace(analysis);
@@ -1684,6 +2442,9 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
       analysis.deliveryAnalysis.fillerWords.breakdown = fillerBreakdown;
     }
 
+    // Enforce classification-based hard caps (nonsense/off-topic detection)
+    enforceClassificationCapsInPlace(analysis, transcript, durationSecondsActual);
+
     // Apply rubric length penalties and enforce rubric-derived tournament readiness + tier.
     applyLengthPenaltiesInPlace(analysis, durationSecondsActual);
     // Ensure category scores are consistent with the detailed sub-scores (prevents “subscores high but category low” mismatches).
@@ -1702,6 +2463,26 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
       fillerPerMinute,
       analysis.bodyLanguageAnalysis?.eyeContact?.percentage
     );
+
+    // Final enforcement of classification caps (after all score recomputation)
+    const classification = analysis.classification as SpeechClassification;
+    if (classification === 'too_short' || classification === 'nonsense' || classification === 'off_topic') {
+      analysis.overallScore = Math.min(analysis.overallScore, 2.5);
+      analysis.capsApplied = true;
+    } else if (classification === 'mostly_off_topic') {
+      analysis.overallScore = Math.min(analysis.overallScore, 6.0);
+      analysis.capsApplied = true;
+    }
+
+    // Apply heuristic pre-check cap (from TASK B) - ensures server-side enforcement
+    if (heuristicResult.maxOverallScore < 10.0) {
+      const prevScore = analysis.overallScore;
+      analysis.overallScore = Math.min(analysis.overallScore, heuristicResult.maxOverallScore);
+      if (analysis.overallScore < prevScore) {
+        analysis.capsApplied = true;
+        console.log(`   🔒 Heuristic cap applied: ${prevScore} → ${analysis.overallScore} (max ${heuristicResult.maxOverallScore})`);
+      }
+    }
 
     // Priority Improvements should represent the biggest real gaps.
     // Important: do not recommend filler/eye contact/pacing fixes when metrics show they are already fine.
@@ -1722,9 +2503,33 @@ Return ONLY valid JSON matching this structure (NO transcript field; transcript 
       success: true,
       transcript,
       analysis,
+      transcriptIntegrity,
+      parseMetrics,
+      ...(analysisWarning ? { analysisWarning } : {}),
     };
 
   } catch (error) {
+    // TASK C: Handle JsonParseError specially - return structured error info
+    if (error instanceof JsonParseError) {
+      console.error(`❌ Analysis failed due to JSON parse error`);
+      console.error(`   parseFailCount: ${error.parseFailCount}, repairAttempted: ${error.repairAttempted}`);
+      return {
+        success: false,
+        transcript: '',
+        error: error.message,
+        errorDetails: {
+          type: 'parse_failure',
+          message: error.message,
+          rawModelOutput: error.rawOutput,
+        },
+        parseMetrics: {
+          parseFailCount: error.parseFailCount,
+          repairUsed: error.repairAttempted,
+          rawOutput: error.rawOutput,
+        },
+      };
+    }
+    
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error('❌ Analysis failed:', msg);
     if (error instanceof Error && (error as any).cause) {

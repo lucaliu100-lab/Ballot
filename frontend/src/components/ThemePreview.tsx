@@ -19,10 +19,9 @@ function ThemePreview({ roundData, onChangeTheme, onEndPrep, isChangingTheme }: 
   return (
     <div style={styles.container}>
       <div style={styles.inner}>
+        {/* Header */}
         <div style={styles.header}>
-          <div style={styles.stepIndicator}>STEP 1 OF 4</div>
           <h2 style={styles.title}>Theme</h2>
-          <p style={styles.subtitle}>Select your impromptu topic</p>
         </div>
 
         {/* Theme Card */}
@@ -49,6 +48,11 @@ function ThemePreview({ roundData, onChangeTheme, onEndPrep, isChangingTheme }: 
           </button>
         </div>
       </div>
+
+      {/* Step Indicator at Bottom */}
+      <div style={styles.stepIndicator}>
+        STEP 1 OF 4
+      </div>
     </div>
   );
 }
@@ -57,50 +61,39 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    minHeight: '100vh',
+    height: 'calc(100vh - 64px)', // Account for navbar
+    overflow: 'hidden',
     padding: '0 24px',
     background: '#ffffff',
     maxWidth: '1280px',
     margin: '0 auto',
     fontFamily: "'Segoe UI', system-ui, sans-serif",
     alignItems: 'center',
+    position: 'relative',
   },
   inner: {
+    flex: 1,
     width: '100%',
     maxWidth: '900px',
-    paddingTop: '60px', // Adjusted slightly
-    paddingBottom: '120px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: '-32px', // Shift up to feel centered with navbar
   },
   header: {
     textAlign: 'center',
-    marginBottom: '48px',
+    marginBottom: '32px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
   },
-  stepIndicator: {
-    fontSize: '12px',
-    fontWeight: 700,
-    color: '#9ca3af',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginBottom: '16px',
-  },
   title: {
     color: '#111827',
-    fontSize: '40px',
-    margin: '0 0 8px 0',
+    fontSize: '56px',
+    margin: '0',
     fontWeight: 800,
     letterSpacing: '-0.02em',
-  },
-  subtitle: {
-    fontSize: '16px',
-    color: '#6b7280',
-    margin: 0,
-    fontWeight: 500,
   },
   themeCard: {
     width: '100%',
@@ -110,15 +103,15 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #e5e7eb',
     borderRadius: '16px',
     textAlign: 'center',
-    marginBottom: '60px',
+    marginBottom: '40px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: '200px',
+    minHeight: '180px',
   },
   themeText: {
     color: '#111827',
-    fontSize: '48px',
+    fontSize: '56px',
     margin: 0,
     fontWeight: 800,
     letterSpacing: '-0.02em',
@@ -153,6 +146,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'color 0.2s ease',
+  },
+  stepIndicator: {
+    position: 'absolute',
+    bottom: '24px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    fontSize: '12px',
+    fontWeight: 700,
+    color: '#9ca3af',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
 };
 

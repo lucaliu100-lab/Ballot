@@ -2,8 +2,8 @@
  * PrepTimer Component
  * 
  * Shows a countdown timer for the user to prepare.
- * Displays the selected quote and allows skipping to recording early.
- * Supports switching between High School (2min) and Middle School (3min) formats.
+ * Timer does NOT start immediately - user must click Start button.
+ * Displays the selected quote and allows switching speech formats.
  */
 
 import { useState, useEffect } from 'react';
@@ -29,39 +29,40 @@ function PrepTimer({
   // Track remaining time in seconds - initialize to current format duration
   const [timeLeft, setTimeLeft] = useState(currentDuration);
   
+  // Track whether timer has started
+  const [timerStarted, setTimerStarted] = useState(false);
+  
   // Track elapsed time (used for format switching)
   const elapsedTime = currentDuration - timeLeft;
 
-  // Get the alternate format
-  const alternateFormat: SpeechFormat = speechFormat === 'high-school' ? 'middle-school' : 'high-school';
-  const currentFormatName = SPEECH_FORMATS[speechFormat].name;
-  const alternateFormatName = SPEECH_FORMATS[alternateFormat].name;
-  const alternateDuration = SPEECH_FORMATS[alternateFormat].prepDuration;
-
   // Handle format switch - keep elapsed time constant
-  // Example: 1:30 left on HS (30s elapsed) → 2:30 left on MS (30s elapsed)
-  const handleFormatSwitch = () => {
-    const newFormat = alternateFormat;
-    const newDuration = SPEECH_FORMATS[newFormat].prepDuration;
+  const handleFormatSwitch = (format: SpeechFormat) => {
+    const newDuration = SPEECH_FORMATS[format].prepDuration;
     // Keep elapsed time the same, calculate new remaining time
     const newTimeLeft = Math.max(0, newDuration - elapsedTime);
     setTimeLeft(newTimeLeft);
-    onFormatChange(newFormat);
+    onFormatChange(format);
+  };
+
+  // Handle start button click
+  const handleStart = () => {
+    setTimerStarted(true);
   };
 
   // Format seconds into MM:SS display
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    // Pad with leading zeros: "1:05" instead of "1:5"
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Calculate progress percentage for the visual progress ring (use current format duration)
-  const progress = ((currentDuration - timeLeft) / currentDuration) * 100;
+  const progress = timerStarted ? ((currentDuration - timeLeft) / currentDuration) * 100 : 0;
 
-  // Set up the countdown timer
+  // Set up the countdown timer - only runs when timer is started
   useEffect(() => {
+    if (!timerStarted) return;
+    
     // If timer reaches 0, move to next screen with 0 remaining
     if (timeLeft <= 0) {
       onTimerComplete(0);
@@ -75,89 +76,120 @@ function PrepTimer({
 
     // Cleanup: clear interval when component unmounts or timeLeft changes
     return () => clearInterval(timerId);
-  }, [timeLeft, onTimerComplete]);
+  }, [timeLeft, onTimerComplete, timerStarted]);
+
+  // Reset timeLeft when format changes (before timer starts)
+  useEffect(() => {
+    if (!timerStarted) {
+      setTimeLeft(currentDuration);
+    }
+  }, [currentDuration, timerStarted]);
 
   return (
     <div style={styles.container}>
       <div style={styles.inner}>
         {/* Header */}
         <div style={styles.header}>
-          <div style={styles.kicker}>PREPARATION</div>
           <h2 style={styles.title}>Preparation Time</h2>
-          <p style={styles.subtitle}>
-            {speechFormat === 'high-school' 
-              ? 'Use these two minutes to structure your speech before recording.'
-              : 'Use these three minutes to structure your speech before recording.'}
-          </p>
-          <div style={styles.formatBadge}>{currentFormatName}</div>
         </div>
         
-        {/* Selected Quote */}
-        <div style={styles.quoteBox}>
-          <div style={styles.quoteLabel}>Your selected quote</div>
-          <div style={styles.quote}>"{selectedQuote}"</div>
-        </div>
-
-        {/* Main content area */}
-        <div style={styles.mainContent}>
-          {/* Circular timer display */}
-          <div style={styles.timerContainer}>
-            <svg style={styles.progressRing} viewBox="0 0 100 100">
-              <circle
-                cx="50"
-                cy="50"
-                r="45"
-                fill="none"
-                stroke="#e5e7eb"
-                strokeWidth="6"
-              />
-              <circle
-                cx="50"
-                cy="50"
-                r="45"
-                fill="none"
-                stroke="#111827"
-                strokeWidth="6"
-                strokeLinecap="round"
-                strokeDasharray={`${progress * 2.83} 283`}
-                transform="rotate(-90 50 50)"
-                style={{ transition: 'stroke-dasharray 1s ease' }}
-              />
-            </svg>
-            <div style={styles.timerText}>{formatTime(timeLeft)}</div>
+        {/* Main Content Box */}
+        <div style={styles.mainBox}>
+          {/* Left Side - Timer */}
+          <div style={styles.timerSide}>
+            <div style={styles.timerContainer}>
+              <svg style={styles.progressRing} viewBox="0 0 100 100">
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  stroke="#e5e7eb"
+                  strokeWidth="5"
+                />
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="45"
+                  fill="none"
+                  stroke="#111827"
+                  strokeWidth="5"
+                  strokeLinecap="round"
+                  strokeDasharray={`${progress * 2.83} 283`}
+                  transform="rotate(-90 50 50)"
+                  style={{ transition: 'stroke-dasharray 1s ease' }}
+                />
+              </svg>
+              <div style={styles.timerText}>{formatTime(timeLeft)}</div>
+            </div>
           </div>
 
-          {/* Tips */}
-          <div style={styles.tips}>
-            <div style={styles.tipsTitle}>Preparation tips</div>
-            <ul style={styles.tipsList}>
-              <li>Define what the quote means in one sentence</li>
-              <li>Pick a personal example + a universal example</li>
-              <li>Structure: Thesis → 2 points → closing takeaway</li>
-            </ul>
+          {/* Right Side - Quote, Format Selection, Start */}
+          <div style={styles.controlsSide}>
+            {/* Quote Display */}
+            <div style={styles.quoteSection}>
+              <div style={styles.quoteLabel}>Quote:</div>
+              <div style={styles.quoteText}>"{selectedQuote}"</div>
+            </div>
+
+            {/* Format Selection */}
+            <div style={styles.formatSection}>
+              <div style={styles.formatLabel}>Select Level:</div>
+              <div style={styles.formatButtons}>
+                <button
+                  onClick={() => handleFormatSwitch('middle-school')}
+                  disabled={timerStarted}
+                  style={{
+                    ...styles.formatButton,
+                    ...(speechFormat === 'middle-school' ? styles.formatButtonActive : {}),
+                    opacity: timerStarted ? 0.6 : 1,
+                    cursor: timerStarted ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Middle School Impromptu
+                  <span style={styles.formatDuration}>3min prep, 4min speak</span>
+                </button>
+                <button
+                  onClick={() => handleFormatSwitch('high-school')}
+                  disabled={timerStarted}
+                  style={{
+                    ...styles.formatButton,
+                    ...(speechFormat === 'high-school' ? styles.formatButtonActive : {}),
+                    opacity: timerStarted ? 0.6 : 1,
+                    cursor: timerStarted ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  High School Impromptu
+                  <span style={styles.formatDuration}>2min prep, 5min speak</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Start Button - Only shown before timer starts */}
+            {!timerStarted && (
+              <button onClick={handleStart} style={styles.startButton}>
+                Start
+              </button>
+            )}
           </div>
         </div>
 
-        {/* CTA */}
-        <div style={styles.actions}>
-          <button
-            onClick={() => onTimerComplete(timeLeft)}
-            style={styles.primaryButton}
-          >
-            End Prep & Start Recording
-          </button>
-          <button
-            onClick={handleFormatSwitch}
-            style={styles.formatSwitchButton}
-          >
-            Switch to {alternateFormatName}
-            <span style={styles.formatSwitchHint}>
-              {speechFormat === 'high-school' 
-                ? `(3min prep, 4min speak) → ${formatTime(Math.max(0, alternateDuration - elapsedTime))} remaining`
-                : `(2min prep, 5min speak) → ${formatTime(Math.max(0, alternateDuration - elapsedTime))} remaining`}
-            </span>
-          </button>
-        </div>
+        {/* CTA - Only shown after timer starts */}
+        {timerStarted && (
+          <div style={styles.actions}>
+            <button
+              onClick={() => onTimerComplete(timeLeft)}
+              style={styles.primaryButton}
+            >
+              End Prep & Start Recording
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Step Indicator at Bottom */}
+      <div style={styles.stepIndicator}>
+        STEP 3 OF 4
       </div>
     </div>
   );
@@ -168,86 +200,63 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    minHeight: '100vh',
+    height: 'calc(100vh - 64px)', // Account for navbar
+    overflow: 'hidden',
     padding: '0 24px',
     background: '#ffffff',
     maxWidth: '1280px',
     margin: '0 auto',
     fontFamily: "'Segoe UI', system-ui, sans-serif",
     alignItems: 'center',
+    position: 'relative',
   },
   inner: {
+    flex: 1,
     width: '100%',
     maxWidth: '900px',
-    paddingTop: '72px',
-    paddingBottom: '120px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: '60px',
+    marginTop: '-32px', // Shift up to feel centered with navbar
   },
   header: {
     textAlign: 'center',
     marginBottom: '32px',
   },
-  kicker: {
-    fontSize: '12px',
-    color: '#6b7280',
-    letterSpacing: '0.12em',
-    textTransform: 'uppercase',
-    fontWeight: 600,
-    marginBottom: '8px',
-  },
   title: {
     color: '#111827',
-    fontSize: '36px',
-    margin: '0 0 8px 0',
+    fontSize: '48px',
+    margin: '0',
     fontWeight: 800,
     letterSpacing: '-0.02em',
   },
-  subtitle: {
-    color: '#6b7280',
-    fontSize: '16px',
-    margin: 0,
-    maxWidth: '640px',
-    lineHeight: 1.6,
-  },
-  quoteBox: {
+  
+  // Main Box - Split Layout
+  mainBox: {
+    display: 'flex',
     width: '100%',
-    maxWidth: '800px',
     background: '#ffffff',
     border: '1px solid #e5e7eb',
-    borderRadius: '12px',
-    padding: '20px 24px',
-    marginBottom: '40px',
-    boxSizing: 'border-box',
+    borderRadius: '16px',
+    overflow: 'hidden',
   },
-  quoteLabel: {
-    color: '#6b7280',
-    fontSize: '12px',
-    fontWeight: 700,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    marginBottom: '10px',
-  },
-  quote: {
-    color: '#111827',
-    fontSize: '16px',
-    margin: 0,
-    fontStyle: 'italic',
-    lineHeight: 1.6,
-  },
-  mainContent: {
+  
+  // Left Side - Timer (larger)
+  timerSide: {
+    flex: '0 0 320px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '48px',
-    width: '100%',
-    flexWrap: 'wrap',
+    padding: '40px',
+    borderRight: '1px solid #e5e7eb',
+    background: '#fafafa',
   },
   timerContainer: {
     position: 'relative',
-    width: '260px',
-    height: '260px',
+    width: '240px',
+    height: '240px',
     flexShrink: 0,
   },
   progressRing: {
@@ -259,41 +268,108 @@ const styles: Record<string, React.CSSProperties> = {
     top: '50%',
     left: '50%',
     transform: 'translate(-50%, -50%)',
-    fontSize: '3.25rem',
+    fontSize: '3rem',
     fontWeight: 800,
     color: '#111827',
     fontFamily: 'monospace',
   },
-  tips: {
-    background: '#f9fafb',
-    border: '1px solid #e5e7eb',
-    borderRadius: '12px',
-    padding: '20px 24px',
-    maxWidth: '420px',
-    boxSizing: 'border-box',
+  
+  // Right Side - Controls
+  controlsSide: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '32px',
+    gap: '20px',
   },
-  tipsTitle: {
-    color: '#111827',
-    fontSize: '14px',
-    margin: '0 0 12px 0',
-    fontWeight: 800,
-    letterSpacing: '0.06em',
+  
+  // Quote Section
+  quoteSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  quoteLabel: {
+    color: '#6b7280',
+    fontSize: '12px',
+    fontWeight: 700,
+    letterSpacing: '0.08em',
     textTransform: 'uppercase',
   },
-  tipsList: {
-    color: '#374151',
-    fontSize: '14px',
-    margin: 0,
-    paddingLeft: '20px',
-    lineHeight: 1.9,
+  quoteText: {
+    color: '#111827',
+    fontSize: '15px',
+    fontStyle: 'italic',
+    lineHeight: 1.6,
   },
+  
+  // Format Selection
+  formatSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  formatLabel: {
+    color: '#6b7280',
+    fontSize: '12px',
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+  },
+  formatButtons: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  formatButton: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '2px',
+    padding: '10px 14px',
+    background: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 600,
+    color: '#374151',
+    textAlign: 'left',
+    transition: 'all 0.2s ease',
+  },
+  formatButtonActive: {
+    background: '#f3f4f6',
+    borderColor: '#111827',
+  },
+  formatDuration: {
+    fontSize: '11px',
+    fontWeight: 400,
+    color: '#9ca3af',
+  },
+  
+  // Start Button
+  startButton: {
+    background: '#000000',
+    color: '#ffffff',
+    border: 'none',
+    padding: '14px 28px',
+    fontSize: '16px',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    fontWeight: 700,
+    transition: 'background-color 200ms ease, transform 200ms ease',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+    alignSelf: 'flex-start',
+    marginTop: '4px',
+  },
+  
+  // Actions (after timer starts)
   actions: {
-    marginTop: '48px',
+    marginTop: '32px',
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '16px',
   },
   primaryButton: {
     background: '#000000',
@@ -309,43 +385,17 @@ const styles: Record<string, React.CSSProperties> = {
     width: '340px',
     textAlign: 'center',
   },
-  formatSwitchButton: {
-    background: 'transparent',
-    color: '#6b7280',
-    border: '1px solid #e5e7eb',
-    padding: '12px 24px',
-    fontSize: '14px',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    fontWeight: 600,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '4px',
-    transition: 'all 200ms ease',
-    width: '340px',
-  },
-  formatSwitchHint: {
+  stepIndicator: {
+    position: 'absolute',
+    bottom: '24px',
+    left: '50%',
+    transform: 'translateX(-50%)',
     fontSize: '12px',
-    fontWeight: 400,
+    fontWeight: 700,
     color: '#9ca3af',
-  },
-  formatBadge: {
-    display: 'inline-block',
-    marginTop: '12px',
-    padding: '6px 12px',
-    background: '#f3f4f6',
-    border: '1px solid #e5e7eb',
-    borderRadius: '6px',
-    fontSize: '12px',
-    fontWeight: 600,
-    color: '#374151',
-    letterSpacing: '0.02em',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
 };
 
 export default PrepTimer;
-
-
-
-

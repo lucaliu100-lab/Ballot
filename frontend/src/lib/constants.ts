@@ -106,5 +106,12 @@ export const API_ENDPOINTS = {
   startRound: `${API_BASE_URL}/start-round`,
   upload: `${API_BASE_URL}/upload`,
   processAll: `${API_BASE_URL}/process-all`,
+  analysisStatus: `${API_BASE_URL}/analysis-status`,
+} as const;
+
+/** Polling configuration for analysis status */
+export const POLLING_CONFIG = {
+  intervalMs: 2500,         // Poll every 2.5 seconds
+  maxDurationMs: 600_000,   // Max 10 minutes before offering "refresh later"
 } as const;
 

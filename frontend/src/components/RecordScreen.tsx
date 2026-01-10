@@ -477,11 +477,6 @@ function RecordScreen({
 
   return (
     <div style={styles.container}>
-      {/* Quote display - compact at top */}
-      <div style={styles.quoteBar}>
-        <p style={styles.quoteText}>"{selectedQuote}"</p>
-      </div>
-
       {/* Main video area - takes most of the screen */}
       <div style={styles.videoWrapper}>
         <div style={styles.videoContainer}>
@@ -539,6 +534,11 @@ function RecordScreen({
             </>
           )}
 
+          {/* Quote display inside video frame - top center */}
+          <div style={styles.quoteOverlay}>
+            <p style={styles.quoteText}>"{selectedQuote}"</p>
+          </div>
+
           {/* Timer overlay - top right */}
           <div style={styles.timerOverlay}>
             <div style={{
@@ -577,7 +577,7 @@ function RecordScreen({
             </div>
           )}
 
-          {/* Start Recording Button - inside video frame, center bottom */}
+          {/* Start Recording Button - inside video frame, center */}
           {recordingState === 'idle' && (
             <button
               onClick={startRecording}
@@ -638,21 +638,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
+    overflow: 'hidden',
     background: '#0a0a0a',
     padding: '16px',
-  },
-  quoteBar: {
-    background: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: '8px',
-    padding: '12px 20px',
-    marginBottom: '16px',
-  },
-  quoteText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: '0.95rem',
-    margin: 0,
-    fontStyle: 'italic',
-    textAlign: 'center',
   },
   videoWrapper: {
     flex: 1,
@@ -667,18 +655,40 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
     background: '#000',
     border: '2px solid rgba(255, 255, 255, 0.1)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   video: {
     width: '100%',
     height: '100%',
-    objectFit: 'cover',
+    objectFit: 'contain', // Show full frame with gaps on sides
     display: 'block',
   },
-  // Preview video after recording - use 'contain' so controls work properly
+  quoteOverlay: {
+    position: 'absolute',
+    top: '20px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(0, 0, 0, 0.7)',
+    backdropFilter: 'blur(10px)',
+    borderRadius: '12px',
+    padding: '12px 24px',
+    maxWidth: '80%',
+    textAlign: 'center',
+  },
+  quoteText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: '0.95rem',
+    margin: 0,
+    fontStyle: 'italic',
+    lineHeight: 1.5,
+  },
+  // Preview video after recording
   previewVideo: {
     width: '100%',
     height: '100%',
-    objectFit: 'contain',
+    objectFit: 'contain', // Show full frame with gaps on sides
     display: 'block',
     background: '#000',
     cursor: 'pointer',
