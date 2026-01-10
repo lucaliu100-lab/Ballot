@@ -558,7 +558,7 @@ function App() {
         
         return (
           <UploadSuccess
-            uploadResponse={uploadResponse}
+            uploadResponse={uploadResponse ?? undefined}
             theme={roundData?.theme || 'Unknown Theme'}
             quote={selectedQuote || 'Quote not available'}
             onFeedbackReady={handleFeedbackReady}
