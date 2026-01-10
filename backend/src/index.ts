@@ -1030,7 +1030,9 @@ async function processAnalysisJob(sessionId: string, sessionData: SessionData): 
     console.error(`❌ [processAnalysisJob] Exception for session ${sessionId}:`, errorMessage);
   } finally {
     // GUARANTEE: Job is marked complete/error even if early return was missed
-    if (!analysisSucceeded && job.status !== 'complete' && job.status !== 'error') {
+    // Cast to string to avoid TS flow analysis issue (completeJob may have changed status)
+    const currentStatus = job.status as string;
+    if (!analysisSucceeded && currentStatus !== 'complete' && currentStatus !== 'error') {
       console.warn(`⚠️ [processAnalysisJob] Finally block catching incomplete job for ${sessionId}`);
       completeJob(job, 'error', { error: analysisError || 'Analysis did not complete properly' });
     }
