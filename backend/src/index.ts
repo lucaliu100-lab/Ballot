@@ -22,7 +22,13 @@ import dns from 'node:dns';
 dns.setDefaultResultOrder('ipv4first');
 
 // Import our custom modules for Gemini multimodal analysis
-import { analyzeSpeechWithGemini, isGeminiConfigured, getGeminiStatus } from './geminiClient';
+import { 
+  analyzeSpeechWithGemini, 
+  analyzeSpeechChampionship,
+  isGeminiConfigured, 
+  getGeminiStatus,
+  type ChampionshipAnalysis
+} from './geminiClient';
 
 // Load environment variables
 // Try backend/.env first, then root .env for local development
@@ -993,35 +999,79 @@ async function processAnalysisJob(sessionId: string, sessionData: SessionData): 
     job.progress = 30;
     job.updatedAt = new Date();
 
-    const result = await analyzeSpeechWithGemini({
-      videoPath,
-      theme: safeTheme || 'Unknown',
-      quote: safeQuote || 'Unknown quote',
-      durationSecondsHint: sessionData.durationSecondsHint,
-      framing: sessionData.framing,
-    });
-
-    job.progress = 90;
-    job.updatedAt = new Date();
-
-    if (!result.success) {
-      analysisError = result.error || 'Analysis failed';
-      console.error(`❌ [processAnalysisJob] Analysis returned error for session ${sessionId}: ${analysisError}`);
-    } else {
-      // SUCCESS PATH - save analysis AND complete job
-      analysisSucceeded = true;
-      const transcript = result.transcript || '';
-      const analysis = result.analysis;
+    // Use championship-v1 format by default (new judging system)
+    // This provides RFD-first feedback, evidence receipts, ranked levers, and metrics-only delivery coaching
+    const useChampionshipFormat = process.env.USE_LEGACY_JUDGING !== 'true';
+    
+    if (useChampionshipFormat) {
+      console.log(`🏆 [processAnalysisJob] Using championship-v1 format for session ${sessionId}`);
       
-      console.log(`✅ [processAnalysisJob] Analysis succeeded for session ${sessionId}`);
-      
-      // CRITICAL: Save analysis first, then update job
-      saveAnalysis(sessionId, transcript, analysis, false);
-      completeJob(job, 'complete', {
-        transcript,
-        analysis,
-        isMock: false,
+      const result = await analyzeSpeechChampionship({
+        videoPath,
+        theme: safeTheme || 'Unknown',
+        quote: safeQuote || 'Unknown quote',
+        durationSecondsHint: sessionData.durationSecondsHint,
+        framing: sessionData.framing,
+        format: 'championship-v1',
       });
+
+      job.progress = 90;
+      job.updatedAt = new Date();
+
+      if (!result.success) {
+        analysisError = result.error || 'Analysis failed';
+        console.error(`❌ [processAnalysisJob] Championship analysis returned error for session ${sessionId}: ${analysisError}`);
+      } else {
+        // SUCCESS PATH - save championship analysis AND complete job
+        analysisSucceeded = true;
+        const transcript = result.transcript || '';
+        const analysis = result.championshipAnalysis;
+        
+        console.log(`✅ [processAnalysisJob] Championship analysis succeeded for session ${sessionId}`);
+        console.log(`   Score: ${analysis?.scoring?.overallScore} (${analysis?.scoring?.performanceTier})`);
+        
+        // CRITICAL: Save analysis first, then update job
+        saveAnalysis(sessionId, transcript, analysis, false);
+        completeJob(job, 'complete', {
+          transcript,
+          analysis,
+          isMock: false,
+        });
+      }
+    } else {
+      // Legacy format (backward compatibility)
+      console.log(`📝 [processAnalysisJob] Using legacy format for session ${sessionId}`);
+      
+      const result = await analyzeSpeechWithGemini({
+        videoPath,
+        theme: safeTheme || 'Unknown',
+        quote: safeQuote || 'Unknown quote',
+        durationSecondsHint: sessionData.durationSecondsHint,
+        framing: sessionData.framing,
+      });
+
+      job.progress = 90;
+      job.updatedAt = new Date();
+
+      if (!result.success) {
+        analysisError = result.error || 'Analysis failed';
+        console.error(`❌ [processAnalysisJob] Analysis returned error for session ${sessionId}: ${analysisError}`);
+      } else {
+        // SUCCESS PATH - save analysis AND complete job
+        analysisSucceeded = true;
+        const transcript = result.transcript || '';
+        const analysis = result.analysis;
+        
+        console.log(`✅ [processAnalysisJob] Analysis succeeded for session ${sessionId}`);
+        
+        // CRITICAL: Save analysis first, then update job
+        saveAnalysis(sessionId, transcript, analysis, false);
+        completeJob(job, 'complete', {
+          transcript,
+          analysis,
+          isMock: false,
+        });
+      }
     }
 
   } catch (error) {

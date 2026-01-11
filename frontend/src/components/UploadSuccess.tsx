@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { UploadResponse, DebateAnalysis, ProcessAllResponse, AnalysisStatusResponse, JobStatus } from '../types';
+import { UploadResponse, DebateAnalysis, ChampionshipAnalysis, ProcessAllResponse, AnalysisStatusResponse, JobStatus } from '../types';
 import { API_ENDPOINTS, POLLING_CONFIG } from '../lib/constants';
 
 // Dev mode check for verbose logging
@@ -31,10 +31,10 @@ interface UploadSuccessProps {
   theme: string;                    // Theme of the round
   quote: string;                    // Selected quote
   onFeedbackReady: (
-    analysis: DebateAnalysis, 
+    analysis: DebateAnalysis | ChampionshipAnalysis, 
     isMock: boolean,
     transcript: string
-  ) => void;  // Called when feedback is ready
+  ) => void;  // Called when feedback is ready (supports both legacy and championship formats)
   onMissingParams?: () => void;     // Called if sessionId/jobId can't be determined
 }
 

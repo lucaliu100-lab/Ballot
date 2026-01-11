@@ -3,13 +3,14 @@
  * 
  * Fetches all sessions to determine navigation context, then displays the
  * full Tournament Ballot for the selected session.
- * Acts as a page wrapper around FeedbackReport with added navigation.
+ * Supports both legacy (FeedbackReport) and championship (ChampionshipFeedbackReport) formats.
  */
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import FeedbackReport from './FeedbackReport';
-import { DebateAnalysis } from '../types';
+import ChampionshipFeedbackReport from './ChampionshipFeedbackReport';
+import { DebateAnalysis, ChampionshipAnalysis, isChampionshipAnalysis } from '../types';
 
 interface BallotViewProps {
   sessionId: string;
@@ -131,11 +132,11 @@ function BallotView({ sessionId, onGoHome, onRedoRound, onNewRound, onNavigate }
     );
   }
 
-  // Parse analysis data
-  let analysis: DebateAnalysis | null = null;
+  // Parse analysis data - supports both legacy and championship formats
+  let analysis: DebateAnalysis | ChampionshipAnalysis | null = null;
   try {
     if (session.fullAnalysisJson) {
-       // InstantDB might store as object or string depending on version
+       // Supabase might store as object or string depending on version
        if (typeof session.fullAnalysisJson === 'string') {
           analysis = JSON.parse(session.fullAnalysisJson);
        } else {
@@ -148,28 +149,58 @@ function BallotView({ sessionId, onGoHome, onRedoRound, onNewRound, onNavigate }
 
   if (!analysis) {
      return (
-        <div style={{padding: '40px', textAlign: 'center'}}>
-           Ballot data is incomplete or corrupted.
-           <br/>
-           <button onClick={onGoHome}>Return to History</button>
+        <div style={{padding: '40px', textAlign: 'center', fontFamily: "'Segoe UI', sans-serif"}}>
+           <p style={{color: '#666'}}>Ballot data is incomplete or corrupted.</p>
+           <button 
+             onClick={onGoHome}
+             style={{
+               marginTop: '16px',
+               background: '#111',
+               color: '#fff',
+               border: 'none',
+               padding: '10px 20px',
+               borderRadius: '6px',
+               cursor: 'pointer'
+             }}
+           >
+             Return to History
+           </button>
         </div>
      );
   }
 
+  // Determine which component to render based on analysis format
+  const isChampionship = isChampionshipAnalysis(analysis);
+
   return (
     <>
-      <FeedbackReport
-        analysis={analysis}
-        theme={session.theme}
-        quote={session.quote}
-        transcript={session.transcript}
-        videoFilename={session.videoFilename || ''}
-        onGoHome={onGoHome}
-        onRedoRound={onRedoRound}
-        onNewRound={onNewRound}
-        backLabel="← Back to History"
-        readOnly={true}
-      />
+      {isChampionship ? (
+        <ChampionshipFeedbackReport
+          analysis={analysis as ChampionshipAnalysis}
+          theme={session.theme}
+          quote={session.quote}
+          transcript={session.transcript}
+          videoFilename={session.videoFilename || ''}
+          onGoHome={onGoHome}
+          onRedoRound={onRedoRound}
+          onNewRound={onNewRound}
+          backLabel="← Back to History"
+          readOnly={true}
+        />
+      ) : (
+        <FeedbackReport
+          analysis={analysis as DebateAnalysis}
+          theme={session.theme}
+          quote={session.quote}
+          transcript={session.transcript}
+          videoFilename={session.videoFilename || ''}
+          onGoHome={onGoHome}
+          onRedoRound={onRedoRound}
+          onNewRound={onNewRound}
+          backLabel="← Back to History"
+          readOnly={true}
+        />
+      )}
 
       {/* Floating Navigation Controls */}
       <div style={{

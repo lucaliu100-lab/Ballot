@@ -24,7 +24,16 @@ import { API_ENDPOINTS } from './lib/constants';
 import { extractFilename } from './lib/utils';
 
 // Import types
-import { FlowStep, RoundData, UploadResponse, DebateAnalysis, SpeechFormat, SPEECH_FORMATS } from './types';
+import { 
+  FlowStep, 
+  RoundData, 
+  UploadResponse, 
+  DebateAnalysis, 
+  ChampionshipAnalysis,
+  SpeechFormat, 
+  SPEECH_FORMATS,
+  isChampionshipAnalysis,
+} from './types';
 
 // Import all screen components
 import Login from './components/Login';
@@ -38,6 +47,7 @@ import RecordScreen from './components/RecordScreen';
 import UploadSuccess from './components/UploadSuccess';
 import InsufficientSpeech from './components/InsufficientSpeech';
 import FeedbackReport from './components/FeedbackReport';
+import ChampionshipFeedbackReport from './components/ChampionshipFeedbackReport';
 import Navbar from './components/Navbar';
 import History from './components/History';
 import BallotView from './components/BallotView';
@@ -96,8 +106,8 @@ function App() {
   // Response from the upload API
   const [uploadResponse, setUploadResponse] = useState<UploadResponse | null>(null);
 
-  // Feedback/Analysis from Gemini 2.0 Flash
-  const [analysis, setAnalysis] = useState<DebateAnalysis | null>(null);
+  // Feedback/Analysis from Gemini 2.0 Flash (supports both legacy and championship formats)
+  const [analysis, setAnalysis] = useState<DebateAnalysis | ChampionshipAnalysis | null>(null);
   const [isFeedbackMock, setIsFeedbackMock] = useState(false);
 
   // Transcript (needed for saving to DB)
@@ -335,10 +345,10 @@ function App() {
 
   /**
    * Called when all processing is complete and feedback is ready
-   * Move to report step
+   * Move to report step (supports both legacy and championship formats)
    */
   const handleFeedbackReady = (
-    analysisData: DebateAnalysis, 
+    analysisData: DebateAnalysis | ChampionshipAnalysis, 
     isMock: boolean,
     transcriptData: string
   ) => {
@@ -361,10 +371,17 @@ function App() {
 
     // Guard: do not proceed to ballot/report if transcript is too short to score competitively.
     if (wc < 25) {
-      const hint =
-        analysisData?.contentAnalysis?.topicAdherence?.feedback ||
-        analysisData?.priorityImprovements?.[0]?.issue ||
-        '';
+      // Handle both championship and legacy analysis formats
+      let hint = '';
+      if (isChampionshipAnalysis(analysisData)) {
+        // Championship format: get reason from classification or RFD
+        hint = analysisData.classification?.reasons?.[0] || analysisData.rfd?.summary || '';
+      } else {
+        // Legacy format
+        hint = analysisData?.contentAnalysis?.topicAdherence?.feedback ||
+               analysisData?.priorityImprovements?.[0]?.issue || '';
+      }
+      
       const match = typeof hint === 'string'
         ? hint.match(/INSUFFICIENT SPEECH DATA:\s*(.+)$/im)
         : null;
@@ -580,9 +597,28 @@ function App() {
       case 'report':
         // Show the feedback report (only if we have feedback)
         if (!analysis || !roundData) return null;
+        
+        // Use championship format if analysis is championship-v1
+        if (isChampionshipAnalysis(analysis)) {
+          return (
+            <ChampionshipFeedbackReport
+              analysis={analysis}
+              theme={roundData.theme}
+              quote={selectedQuote}
+              transcript={transcript}
+              videoFilename={extractFilename(uploadResponse?.filePath || '')}
+              isMock={isFeedbackMock}
+              onRedoRound={handleRedoRound}
+              onNewRound={handleNewRound}
+              onGoHome={handleGoHome}
+            />
+          );
+        }
+        
+        // Legacy format fallback
         return (
           <FeedbackReport
-            analysis={analysis}
+            analysis={analysis as DebateAnalysis}
             theme={roundData.theme}
             quote={selectedQuote}
             transcript={transcript}

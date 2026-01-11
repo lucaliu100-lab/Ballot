@@ -1,7 +1,7 @@
 /**
  * Gemini Client Module (via OpenRouter)
- * 
- * Handles multimodal analysis (Video + Audio) using Gemini 2.5 Flash.
+ *
+ * Handles multimodal analysis (Video + Audio) using Gemini 3 Flash Preview.
  * Uses the OpenRouter API for unified model access.
  */
 
@@ -100,8 +100,8 @@ function getApiKey(): string {
 }
 
 function getModel(): string {
-  // Production-stable ID for Gemini 2.5 Flash on OpenRouter (more nuanced feedback)
-  return process.env.GEMINI_MODEL || 'google/gemini-2.5-flash-preview-05-20';
+  // Gemini 3 Flash Preview on OpenRouter - better multimodal reasoning for video analysis
+  return process.env.GEMINI_MODEL || 'google/gemini-3-flash-preview';
 }
 
 // ===========================================
@@ -118,6 +118,9 @@ export interface FramingData {
   handsVisible: boolean;
 }
 
+/** Analysis format type */
+export type AnalysisFormat = 'legacy' | 'championship-v1';
+
 export interface GeminiAnalysisInput {
   videoPath: string;
   theme: string;
@@ -132,6 +135,11 @@ export interface GeminiAnalysisInput {
    * If not provided or incomplete, body language defaults to NOT assessable.
    */
   framing?: FramingData;
+  /**
+   * Analysis format to use. Defaults to 'championship-v1' (new format).
+   * 'legacy' uses the old 4-category scoring system.
+   */
+  format?: AnalysisFormat;
 }
 
 export interface GeminiAnalysisResult {
@@ -216,6 +224,136 @@ export interface GeminiAnalysisResult {
   /** Parse/repair metrics */
   parseMetrics?: ParseMetrics;
   /** Warning about analysis quality (e.g., video compression failed, used audio-only) */
+  analysisWarning?: string;
+}
+
+// ===========================================
+// CHAMPIONSHIP-V1 TYPES
+// ===========================================
+
+/** Evidence types for championship format */
+export interface ChampionshipEvidence {
+  id: string;
+  type: 'QUOTE' | 'METRIC';
+  label: 'STRENGTH' | 'GAP';
+  quote?: string;
+  timeRange?: string;
+  metric?: { name: string; value: number; unit: string };
+  warrant: string;
+}
+
+/** Lever drill structure */
+export interface LeverDrill {
+  name: string;
+  steps: [string, string, string];
+  goal: string;
+}
+
+/** Ranked lever (fix recommendation) */
+export interface ChampionshipLever {
+  rank: number;
+  name: string;
+  estimatedScoreGain: string;
+  patternName: string;
+  diagnosis: string;
+  judgeImpact: string;
+  evidenceIds: string[];
+  fixRule: string;
+  coachQuestions: string[];
+  sayThisInstead: [string, string];
+  counterexampleKit: { counterexampleLine: string; resolutionLine: string };
+  drill: LeverDrill;
+}
+
+/** Micro-rewrite */
+export interface ChampionshipMicroRewrite {
+  before: { quote: string; timeRange: string };
+  after: string;
+  whyStronger: string;
+  evidenceIds: string[];
+}
+
+/** Checklist item */
+export interface ChecklistItem {
+  step: number;
+  instruction: string;
+  successCriteria: string;
+}
+
+/** Championship analysis result */
+export interface ChampionshipAnalysis {
+  version: 'championship-v1';
+  meta: {
+    roundType: string;
+    theme: string;
+    quote: string;
+    model: string;
+    generatedAt: string;
+  };
+  classification: {
+    label: 'normal' | 'too_short' | 'nonsense' | 'off_topic' | 'mostly_off_topic';
+    capsApplied: boolean;
+    maxOverallScore: number | null;
+    reasons: string[];
+  };
+  speechRecord: { transcript: string; timecodeNote: string };
+  speechStats: {
+    durationSec: number;
+    durationText: string;
+    wordCount: number;
+    wpm: number;
+    fillerWordCount: number;
+    fillerPerMin: number;
+    pausesPerMin: number | null;
+  };
+  scoring: {
+    weights: { argumentStructure: number; depthWeighing: number; rhetoricLanguage: number };
+    categoryScores: {
+      argumentStructure: { score: number; weighted: number };
+      depthWeighing: { score: number; weighted: number };
+      rhetoricLanguage: { score: number; weighted: number };
+    };
+    overallScore: number;
+    performanceTier: string;
+    tournamentReady: boolean;
+  };
+  rfd: {
+    summary: string;
+    whyThisScore: Array<{ claim: string; evidenceIds: string[] }>;
+    whyNotHigher: {
+      nextBand: string;
+      blockers: Array<{ blocker: string; evidenceIds: string[] }>;
+    };
+  };
+  evidence: ChampionshipEvidence[];
+  levers: ChampionshipLever[];
+  microRewrites: ChampionshipMicroRewrite[];
+  deliveryMetricsCoaching: {
+    snapshot: { wpm: number; fillerPerMin: number; durationText: string; wordCount: number; pausesPerMin: number | null };
+    drill: LeverDrill;
+  };
+  actionPlan: {
+    nextRoundChecklist: [ChecklistItem, ChecklistItem, ChecklistItem];
+    warmup5Min: [string, string, string];
+    duringSpeechCues: [string, string];
+    postRoundReview: [string, string, string];
+  };
+  warnings: string[];
+}
+
+/** Result type that can include either legacy or championship analysis */
+export interface GeminiChampionshipResult {
+  success: boolean;
+  transcript: string;
+  championshipAnalysis?: ChampionshipAnalysis;
+  error?: string;
+  errorDetails?: {
+    type: 'parse_failure' | 'schema_validation' | 'model_error' | 'transcription_error';
+    message: string;
+    rawModelOutput?: string;
+  };
+  transcriptIntegrity?: TranscriptIntegrity;
+  parseMetrics?: ParseMetrics;
   analysisWarning?: string;
 }
 
@@ -1462,13 +1600,21 @@ async function encodeAudioToBase64(audioPath: string): Promise<string> {
 }
 
 function getTranscribeModelCandidates(primary: string | undefined, judgeModel: string): string[] {
-  // Use audio-capable models only. The judgeModel (Gemini) supports audio natively.
-  // Do NOT include openai/whisper-large-v3 - it's not a valid chat completion model on OpenRouter.
+  // Use audio-capable models only. 
+  // NOTE: google/gemini-3-flash-preview does NOT reliably support audio transcription via OpenRouter.
+  // We default to gemini-2.0-flash-001 which has proven audio support.
+  // DO NOT include openai/whisper-large-v3 - it's not a valid chat completion model on OpenRouter.
+  
+  // Default transcription model that's known to work with audio
+  const defaultTranscribeModel = 'google/gemini-2.0-flash-001';
+  
   const candidates = [
     primary,
     process.env.TRANSCRIBE_MODEL_FALLBACK,
-    // Gemini models are audio-capable; use the judge model as fallback.
-    judgeModel,
+    // Use a known working model for transcription (NOT the preview model)
+    defaultTranscribeModel,
+    // Only fall back to judge model if it's not a preview model
+    judgeModel.includes('preview') ? null : judgeModel,
   ].filter((x): x is string => Boolean(x && String(x).trim()));
 
   // Deduplicate while preserving order
@@ -2259,6 +2405,570 @@ async function encodeVideoToBase64(videoPath: string): Promise<string> {
 }
 
 // ===========================================
+// CHAMPIONSHIP-V1 PROMPT BUILDER
+// ===========================================
+
+function buildChampionshipJudgePrompt(
+  theme: string,
+  quote: string,
+  transcriptTimecoded: string,
+  durationSec: number,
+  durationText: string,
+  wordCount: number,
+  wpm: number,
+  fillerCount: number,
+  fillerPerMin: number,
+  pausesPerMin: number | null
+): string {
+  return `You are WinBallot Championship Judge (NSDA-caliber). Your job is to produce a ballot that makes elite competitors feel in control: exact reasons, receipts, and clear upgrade levers.
+
+OUTPUT RULES (NON-NEGOTIABLE)
+- Return ONLY one valid JSON object. No markdown. No code fences. No commentary.
+- Do NOT invent quotes. Every quote MUST be a verbatim substring of the transcript provided.
+- Do NOT invent timestamps. If timecodes are missing/uncertain, use "[no timecode available]".
+- Do NOT claim tone/body language observations unless supported by explicit provided metrics. (In this version, tone/body language are NOT scored.)
+- Be specific. Avoid generic advice. Every major claim must be supported by receipts (quotes/metrics).
+
+INPUTS YOU WILL RECEIVE
+THEME: ${theme}
+QUOTE: ${quote}
+ROUND_TYPE: impromptu
+
+TRANSCRIPT (time-coded if available; only source for quotes):
+"""
+${transcriptTimecoded}
+"""
+
+TRUSTED METRICS (computed by system; do not change):
+durationSec: ${durationSec}
+durationText: ${durationText}
+wordCount: ${wordCount}
+wpm: ${wpm}
+fillerWordCount: ${fillerCount}
+fillerPerMin: ${fillerPerMin}
+${pausesPerMin !== null ? `pausesPerMin: ${pausesPerMin}` : '(pausesPerMin: not available)'}
+
+STEP 0 — CLASSIFY THE SPEECH (MANDATORY FIRST STEP)
+Choose exactly one classification.label:
+- normal: coherent, on-theme, has structure
+- too_short: durationSec < 60 OR wordCount < 100
+- nonsense: incoherent, word salad, gibberish
+- off_topic: coherent but unrelated to theme/quote
+- mostly_off_topic: minimal connection; majority unrelated content
+
+CAPS (HARD):
+- too_short / nonsense / off_topic => capsApplied=true, maxOverallScore=2.5
+- mostly_off_topic => capsApplied=true, maxOverallScore=6.0
+- normal => capsApplied=false, maxOverallScore=null
+
+If capped:
+- Keep output shorter: evidence 5–10, levers 1–2, microRewrites 0–1, RFD 6–10 sentences.
+- Still be specific: explain exactly what caused the cap and what to do next.
+
+SCORING POLICY (CREDIBLE TODAY)
+Overall score is based ONLY on 3 categories:
+- argumentStructure (weight 0.45)
+- depthWeighing (weight 0.35)
+- rhetoricLanguage (weight 0.20)
+
+NOT SCORED (exclude from overall):
+- body language
+- vocal tone (emotion/prosody)
+- subjective delivery (confidence/charisma)
+
+Delivery is METRICS-ONLY and reported separately:
+- wpm, fillerPerMin, duration, wordCount (and pausesPerMin if provided)
+Do not generate a numeric "delivery score" from vibes.
+
+EVIDENCE RULES (RECEIPTS SYSTEM)
+Create evidence items first, then write everything else using evidenceIds.
+Evidence types:
+1) QUOTE evidence:
+- quote: 5–20 words, verbatim substring from transcript
+- timeRange: "m:ss-m:ss" OR "[no timecode available]"
+- label: STRENGTH or GAP
+- warrant: 1–3 sentences explaining what this proves and why it matters competitively
+
+2) METRIC evidence:
+- metric: {name, value, unit}
+- label: STRENGTH or GAP
+- warrant: 1–3 sentences describing judge impact
+
+COUNTS:
+- normal: 12–20 evidence items
+- capped: 5–10 evidence items
+
+RFD REQUIREMENTS (HIGH DETAIL)
+rfd.summary:
+- normal: 10–16 sentences, judge-style, specific, not fluffy
+- capped: 6–10 sentences
+Must include:
+- what earned the score
+- what capped the score
+- what changes move you to next band
+End with one sentence: "This did not reach [next band] because [missing move]."
+
+rfd.whyThisScore:
+- Exactly 2 claims
+- Each claim must cite 3–5 evidenceIds
+
+rfd.whyNotHigher:
+- nextBand string like "8.6+"
+- Exactly 2 blockers
+- Each blocker cites 2–5 evidenceIds
+
+LEVERS (RANKED FIXES)
+- normal: output 3–5 levers ranked by estimatedScoreGain
+- capped: output 1–2 levers only
+Each lever MUST include:
+- rank: number (1 = highest priority)
+- name
+- estimatedScoreGain (e.g., "+0.4 to +0.8")
+- patternName (e.g., "Warrant Gap", "No Tradeoff", "Weak Synthesis", "Mechanism Missing", "Link-back Drift")
+- diagnosis: 6–12 sentences, deep reasoning (why it happens in THIS speech)
+- judgeImpact: 3–6 sentences (how outround judges evaluate this)
+- evidenceIds: 3–6 ids
+- fixRule: one sentence rule
+- coachQuestions: 3–5 hard questions (tradeoff/mechanism/so-what/counterexample)
+- sayThisInstead: exactly 2 copyable lines
+- counterexampleKit: counterexampleLine + resolutionLine
+- drill: name + exactly 3 steps + measurable goal containing a number/%/≥ and "by next session"
+
+MICRO-REWRITES
+- normal: 2–4 microRewrites
+- capped: 0–1
+Each microRewrite must include:
+- before: {quote, timeRange} using a real transcript quote
+- after: 1–2 improved sentences
+- whyStronger: 1–3 sentences explaining judge impact
+- evidenceIds: 1–3 ids
+
+DELIVERY METRICS COACHING (NOT SCORED)
+Include a metrics snapshot and 1 drill:
+- wpm, fillerPerMin, durationText, wordCount, (pausesPerMin if provided)
+Give one drill and a measurable goal (reduce fillerPerMin by X, add pauses, etc.).
+
+NEXT-ROUND CHECKLIST (TIGHT)
+actionPlan.nextRoundChecklist must contain exactly 3 steps.
+Each step must include instruction + measurable successCriteria.
+
+Also include:
+- warmup5Min: exactly 3 bullets
+- duringSpeechCues: exactly 2 bullets
+- postRoundReview: exactly 3 bullets
+
+OUTPUT JSON SCHEMA (MUST MATCH EXACTLY)
+Return one JSON object with these keys:
+
+{
+  "version": "championship-v1",
+  "meta": {
+    "roundType": "impromptu",
+    "theme": "",
+    "quote": "",
+    "model": "",
+    "generatedAt": ""
+  },
+  "classification": {
+    "label": "",
+    "capsApplied": false,
+    "maxOverallScore": null,
+    "reasons": []
+  },
+  "speechRecord": {
+    "transcript": "",
+    "timecodeNote": ""
+  },
+  "speechStats": {
+    "durationSec": 0,
+    "durationText": "",
+    "wordCount": 0,
+    "wpm": 0,
+    "fillerWordCount": 0,
+    "fillerPerMin": 0.0,
+    "pausesPerMin": null
+  },
+  "scoring": {
+    "weights": { "argumentStructure": 0.45, "depthWeighing": 0.35, "rhetoricLanguage": 0.20 },
+    "categoryScores": {
+      "argumentStructure": { "score": 0.0, "weighted": 0.0 },
+      "depthWeighing": { "score": 0.0, "weighted": 0.0 },
+      "rhetoricLanguage": { "score": 0.0, "weighted": 0.0 }
+    },
+    "overallScore": 0.0,
+    "performanceTier": "",
+    "tournamentReady": false
+  },
+  "rfd": {
+    "summary": "",
+    "whyThisScore": [
+      { "claim": "", "evidenceIds": [] },
+      { "claim": "", "evidenceIds": [] }
+    ],
+    "whyNotHigher": {
+      "nextBand": "",
+      "blockers": [
+        { "blocker": "", "evidenceIds": [] },
+        { "blocker": "", "evidenceIds": [] }
+      ]
+    }
+  },
+  "evidence": [],
+  "levers": [],
+  "microRewrites": [],
+  "deliveryMetricsCoaching": {
+    "snapshot": {
+      "wpm": 0,
+      "fillerPerMin": 0.0,
+      "durationText": "",
+      "wordCount": 0,
+      "pausesPerMin": null
+    },
+    "drill": { "name": "", "steps": ["", "", ""], "goal": "" }
+  },
+  "actionPlan": {
+    "nextRoundChecklist": [
+      { "step": 1, "instruction": "", "successCriteria": "" },
+      { "step": 2, "instruction": "", "successCriteria": "" },
+      { "step": 3, "instruction": "", "successCriteria": "" }
+    ],
+    "warmup5Min": ["", "", ""],
+    "duringSpeechCues": ["", ""],
+    "postRoundReview": ["", "", ""]
+  },
+  "warnings": []
+}
+
+SCORING CONSTRAINTS
+- Scores must be realistic 0.0–10.0 with one decimal.
+- categoryScores.*.weighted = score * weight, and overallScore = sum(weighted).
+- If capped: overallScore must be <= maxOverallScore and subscores should reflect the cap (don't output 8+ subscores).
+- performanceTier should match score bands:
+  9.0–10.0 Finals-caliber
+  8.0–8.9 Breaking rounds
+  7.0–7.9 Competitive
+  5.0–6.9 Developing
+  3.0–4.9 Major issues
+  0.0–2.9 Off-topic/nonsense/too short
+- tournamentReady=true ONLY if overallScore >= 7.8 AND no major blockers AND fillerPerMin < 6.0 AND durationSec >= 210.
+
+RETURN ONLY THE JSON OBJECT.`;
+}
+
+// Championship schema for repair pass
+const CHAMPIONSHIP_SCHEMA_FOR_REPAIR = `{
+  "version": "championship-v1",
+  "meta": { "roundType": <string>, "theme": <string>, "quote": <string>, "model": <string>, "generatedAt": <string> },
+  "classification": { "label": <"normal"|"too_short"|"nonsense"|"off_topic"|"mostly_off_topic">, "capsApplied": <boolean>, "maxOverallScore": <number|null>, "reasons": [<string>] },
+  "speechRecord": { "transcript": <string>, "timecodeNote": <string> },
+  "speechStats": { "durationSec": <number>, "durationText": <string>, "wordCount": <number>, "wpm": <number>, "fillerWordCount": <number>, "fillerPerMin": <number>, "pausesPerMin": <number|null> },
+  "scoring": {
+    "weights": { "argumentStructure": 0.45, "depthWeighing": 0.35, "rhetoricLanguage": 0.20 },
+    "categoryScores": {
+      "argumentStructure": { "score": <number>, "weighted": <number> },
+      "depthWeighing": { "score": <number>, "weighted": <number> },
+      "rhetoricLanguage": { "score": <number>, "weighted": <number> }
+    },
+    "overallScore": <number>,
+    "performanceTier": <string>,
+    "tournamentReady": <boolean>
+  },
+  "rfd": {
+    "summary": <string>,
+    "whyThisScore": [{ "claim": <string>, "evidenceIds": [<string>] }],
+    "whyNotHigher": { "nextBand": <string>, "blockers": [{ "blocker": <string>, "evidenceIds": [<string>] }] }
+  },
+  "evidence": [{ "id": <string>, "type": <"QUOTE"|"METRIC">, "label": <"STRENGTH"|"GAP">, "quote": <string|undefined>, "timeRange": <string|undefined>, "metric": <object|undefined>, "warrant": <string> }],
+  "levers": [{ "rank": <number>, "name": <string>, "estimatedScoreGain": <string>, "patternName": <string>, "diagnosis": <string>, "judgeImpact": <string>, "evidenceIds": [<string>], "fixRule": <string>, "coachQuestions": [<string>], "sayThisInstead": [<string>, <string>], "counterexampleKit": { "counterexampleLine": <string>, "resolutionLine": <string> }, "drill": { "name": <string>, "steps": [<string>, <string>, <string>], "goal": <string> } }],
+  "microRewrites": [{ "before": { "quote": <string>, "timeRange": <string> }, "after": <string>, "whyStronger": <string>, "evidenceIds": [<string>] }],
+  "deliveryMetricsCoaching": { "snapshot": { "wpm": <number>, "fillerPerMin": <number>, "durationText": <string>, "wordCount": <number>, "pausesPerMin": <number|null> }, "drill": { "name": <string>, "steps": [<string>, <string>, <string>], "goal": <string> } },
+  "actionPlan": {
+    "nextRoundChecklist": [{ "step": <number>, "instruction": <string>, "successCriteria": <string> }],
+    "warmup5Min": [<string>, <string>, <string>],
+    "duringSpeechCues": [<string>, <string>],
+    "postRoundReview": [<string>, <string>, <string>]
+  },
+  "warnings": [<string>]
+}`;
+
+// ===========================================
+// CHAMPIONSHIP ANALYSIS HELPERS
+// ===========================================
+
+/**
+ * Compute performance tier from overall score (championship format)
+ */
+function computeChampionshipTier(overallScore: number): string {
+  if (overallScore >= 9.0) return 'Finals-caliber';
+  if (overallScore >= 8.0) return 'Breaking rounds';
+  if (overallScore >= 7.0) return 'Competitive';
+  if (overallScore >= 5.0) return 'Developing';
+  if (overallScore >= 3.0) return 'Major issues';
+  return 'Off-topic/nonsense/too short';
+}
+
+/**
+ * Enforce classification caps on championship analysis
+ */
+function enforceChampionshipCapsInPlace(analysis: ChampionshipAnalysis): void {
+  const label = analysis.classification?.label;
+  let maxScore = 10.0;
+  let capsApplied = false;
+
+  switch (label) {
+    case 'too_short':
+    case 'nonsense':
+    case 'off_topic':
+      maxScore = 2.5;
+      capsApplied = true;
+      break;
+    case 'mostly_off_topic':
+      maxScore = 6.0;
+      capsApplied = true;
+      break;
+    default:
+      maxScore = 10.0;
+      capsApplied = false;
+  }
+
+  analysis.classification.capsApplied = capsApplied;
+  analysis.classification.maxOverallScore = capsApplied ? maxScore : null;
+
+  // Cap the scores if needed
+  if (capsApplied && analysis.scoring) {
+    const capScore = (score: number) => Math.min(score, maxScore + 0.5); // Allow subscore slightly above cap
+    
+    if (analysis.scoring.categoryScores.argumentStructure) {
+      analysis.scoring.categoryScores.argumentStructure.score = capScore(analysis.scoring.categoryScores.argumentStructure.score);
+    }
+    if (analysis.scoring.categoryScores.depthWeighing) {
+      analysis.scoring.categoryScores.depthWeighing.score = capScore(analysis.scoring.categoryScores.depthWeighing.score);
+    }
+    if (analysis.scoring.categoryScores.rhetoricLanguage) {
+      analysis.scoring.categoryScores.rhetoricLanguage.score = capScore(analysis.scoring.categoryScores.rhetoricLanguage.score);
+    }
+    
+    // Cap overall score
+    analysis.scoring.overallScore = Math.min(analysis.scoring.overallScore, maxScore);
+  }
+}
+
+/**
+ * Recompute championship weighted scores and overall score
+ */
+function recomputeChampionshipScoresInPlace(analysis: ChampionshipAnalysis): void {
+  if (!analysis.scoring) return;
+
+  const weights = { argumentStructure: 0.45, depthWeighing: 0.35, rhetoricLanguage: 0.20 };
+  analysis.scoring.weights = weights;
+
+  const cs = analysis.scoring.categoryScores;
+  
+  // Recompute weighted scores
+  if (cs.argumentStructure) {
+    cs.argumentStructure.weighted = round1(cs.argumentStructure.score * weights.argumentStructure);
+  }
+  if (cs.depthWeighing) {
+    cs.depthWeighing.weighted = round1(cs.depthWeighing.score * weights.depthWeighing);
+  }
+  if (cs.rhetoricLanguage) {
+    cs.rhetoricLanguage.weighted = round1(cs.rhetoricLanguage.score * weights.rhetoricLanguage);
+  }
+
+  // Recompute overall
+  const overall = (cs.argumentStructure?.weighted || 0) +
+                  (cs.depthWeighing?.weighted || 0) +
+                  (cs.rhetoricLanguage?.weighted || 0);
+  
+  analysis.scoring.overallScore = clamp(round1(overall), 0, 10);
+  analysis.scoring.performanceTier = computeChampionshipTier(analysis.scoring.overallScore);
+}
+
+/**
+ * Enforce tournament readiness for championship format
+ */
+function enforceChampionshipTournamentReadiness(
+  analysis: ChampionshipAnalysis,
+  fillerPerMin: number,
+  durationSec: number
+): void {
+  if (!analysis.scoring) return;
+
+  const overallScore = analysis.scoring.overallScore;
+  const hasNoMajorBlockers = !analysis.classification.capsApplied;
+  
+  // tournamentReady=true ONLY if:
+  // - overallScore >= 7.8
+  // - no caps applied
+  // - fillerPerMin < 6.0
+  // - durationSec >= 210 (3.5 minutes)
+  analysis.scoring.tournamentReady = 
+    overallScore >= 7.8 &&
+    hasNoMajorBlockers &&
+    fillerPerMin < 6.0 &&
+    durationSec >= 210;
+}
+
+/**
+ * Build a minimal championship analysis for capped/insufficient speeches
+ */
+function buildInsufficientChampionshipAnalysis(
+  theme: string,
+  quote: string,
+  transcript: string,
+  durationSec: number,
+  wordCount: number,
+  wpm: number,
+  fillerCount: number,
+  fillerPerMin: number,
+  classification: 'too_short' | 'nonsense' | 'off_topic',
+  reason: string,
+  modelName: string
+): ChampionshipAnalysis {
+  const durationText = formatDurationSeconds(durationSec);
+  
+  return {
+    version: 'championship-v1',
+    meta: {
+      roundType: 'impromptu',
+      theme,
+      quote,
+      model: modelName,
+      generatedAt: new Date().toISOString(),
+    },
+    classification: {
+      label: classification,
+      capsApplied: true,
+      maxOverallScore: 2.5,
+      reasons: [reason],
+    },
+    speechRecord: {
+      transcript,
+      timecodeNote: 'Timecodes estimated or unavailable',
+    },
+    speechStats: {
+      durationSec,
+      durationText,
+      wordCount,
+      wpm,
+      fillerWordCount: fillerCount,
+      fillerPerMin,
+      pausesPerMin: null,
+    },
+    scoring: {
+      weights: { argumentStructure: 0.45, depthWeighing: 0.35, rhetoricLanguage: 0.20 },
+      categoryScores: {
+        argumentStructure: { score: 1.0, weighted: 0.45 },
+        depthWeighing: { score: 1.0, weighted: 0.35 },
+        rhetoricLanguage: { score: 1.0, weighted: 0.20 },
+      },
+      overallScore: 1.0,
+      performanceTier: 'Off-topic/nonsense/too short',
+      tournamentReady: false,
+    },
+    rfd: {
+      summary: `This speech is classified as "${classification}" and cannot be scored normally. ${reason} To exit this cap, ensure your speech: (1) runs at least 60 seconds with 100+ words, (2) directly addresses the provided quote/theme, and (3) follows a coherent structure. Focus on building a clear thesis that interprets the quote, supporting it with 2-3 developed examples, and concluding with a synthesis.`,
+      whyThisScore: [
+        { claim: `The speech did not meet minimum requirements: ${reason}`, evidenceIds: ['E1'] },
+        { claim: 'Without sufficient content addressing the topic, competitive scoring cannot apply.', evidenceIds: ['E1'] },
+      ],
+      whyNotHigher: {
+        nextBand: '5.0+',
+        blockers: [
+          { blocker: `Classification "${classification}" triggers hard cap at 2.5`, evidenceIds: ['E1'] },
+          { blocker: 'Must meet basic requirements before content can be evaluated', evidenceIds: ['E1'] },
+        ],
+      },
+    },
+    evidence: [
+      {
+        id: 'E1',
+        type: 'METRIC',
+        label: 'GAP',
+        metric: { name: 'classification', value: 0, unit: classification },
+        warrant: reason,
+      },
+    ],
+    levers: [
+      {
+        rank: 1,
+        name: 'Exit the cap',
+        estimatedScoreGain: '+3.0 to +5.0',
+        patternName: 'Fundamental Gap',
+        diagnosis: `The speech is classified as "${classification}" which applies a hard score cap. ${reason} This prevents any meaningful competitive evaluation. The first priority is meeting basic requirements: speak for at least 60 seconds with 100+ words, directly address the quote/theme, and maintain coherent structure throughout.`,
+        judgeImpact: 'Judges cannot award competitive scores to speeches that do not meet fundamental requirements. A too-short, off-topic, or nonsensical speech will always rank at the bottom regardless of any strong moments.',
+        evidenceIds: ['E1'],
+        fixRule: 'Before anything else: hit 60+ seconds, 100+ words, and directly interpret the quote.',
+        coachQuestions: [
+          'What is the quote literally saying?',
+          'What universal truth or insight does it suggest?',
+          'What 2-3 examples from real life illustrate this truth?',
+          'How will you connect each example back to the quote?',
+        ],
+        sayThisInstead: [
+          'This quote suggests that [interpretation]. We see this truth in [example 1], [example 2], and [example 3].',
+          'Ultimately, [quote meaning] because [synthesis of examples]. This matters because [broader significance].',
+        ],
+        counterexampleKit: {
+          counterexampleLine: 'Some might say this quote does not apply when...',
+          resolutionLine: 'However, even in those cases, [explain why the interpretation still holds].',
+        },
+        drill: {
+          name: 'Minimum Viable Speech',
+          steps: [
+            'Set a 90-second timer and speak continuously about ANY quote interpretation',
+            'Record and count words - must exceed 100',
+            'Check: Did you mention the quote at least 3 times and give 2+ examples?',
+          ],
+          goal: 'Deliver 3 consecutive practice speeches that each hit 90+ seconds, 120+ words, and reference the quote 3+ times by next session.',
+        },
+      },
+    ],
+    microRewrites: [],
+    deliveryMetricsCoaching: {
+      snapshot: {
+        wpm,
+        fillerPerMin,
+        durationText,
+        wordCount,
+        pausesPerMin: null,
+      },
+      drill: {
+        name: 'Continuous Speech Practice',
+        steps: [
+          'Pick any quote and set a 90-second timer',
+          'Speak without stopping - do not restart or pause to think',
+          'Review: note where you struggled and plan content for those moments',
+        ],
+        goal: 'Complete 5 uninterrupted 90-second speeches by next session.',
+      },
+    },
+    actionPlan: {
+      nextRoundChecklist: [
+        { step: 1, instruction: 'Speak for minimum 90 seconds', successCriteria: 'Timer shows 1:30+ when you stop' },
+        { step: 2, instruction: 'Reference the quote 3+ times', successCriteria: 'Count 3 distinct quote mentions in transcript' },
+        { step: 3, instruction: 'Give 2+ developed examples', successCriteria: 'Each example has claim + evidence + link-back' },
+      ],
+      warmup5Min: [
+        'Read the quote aloud 3 times, emphasizing different words each time',
+        'State your interpretation in one sentence',
+        'List 3 examples that could support it',
+      ],
+      duringSpeechCues: [
+        'After each example, say "This connects to the quote because..."',
+        'If stuck, return to restating the quote and your thesis',
+      ],
+      postRoundReview: [
+        'Did you hit 90+ seconds? If not, where did you stop early?',
+        'Count quote references - target 3+',
+        'Check each example for clear link-back to theme',
+      ],
+    },
+    warnings: [`Speech classified as "${classification}": ${reason}`],
+  };
+}
+
+// ===========================================
 // MAIN ANALYSIS FUNCTION
 // ===========================================
 
@@ -3031,6 +3741,393 @@ JSON OUTPUT RULES
     if (error instanceof Error && (error as any).cause) {
       console.error('   Cause:', (error as any).cause);
     }
+    return {
+      success: false,
+      transcript: '',
+      error: msg,
+    };
+  }
+}
+
+// ===========================================
+// CHAMPIONSHIP FORMAT ANALYSIS FUNCTION
+// ===========================================
+
+export async function analyzeSpeechChampionship(
+  input: GeminiAnalysisInput
+): Promise<GeminiChampionshipResult> {
+  const apiKey = getApiKey();
+  const modelName = getModel();
+
+  if (!apiKey) {
+    return {
+      success: false,
+      transcript: '',
+      error: 'OPENROUTER_API_KEY not found in environment variables.',
+    };
+  }
+
+  console.log(`\n🏆 Analyzing via OpenRouter [Championship Mode, Model: ${modelName}]...`);
+  console.log(`   Video path: ${input.videoPath}`);
+
+  try {
+    // Duration detection (same as legacy)
+    let durationSeconds: number | null = null;
+    try {
+      durationSeconds = await getVideoDurationSecondsRobust(input.videoPath);
+    } catch (e) {
+      console.warn(`⚠️ ffprobe could not determine duration. Attempting transcode fallback...`);
+      try {
+        const transcoded = await transcodeVideoForAnalysis(input.videoPath);
+        durationSeconds = await getVideoDurationSecondsRobust(transcoded);
+      } catch {
+        durationSeconds = input.durationSecondsHint || 0;
+        console.warn(`⚠️ Using client hint: ${durationSeconds}s`);
+      }
+    }
+
+    console.log(`   🎞️  Duration: ${durationSeconds > 0 ? formatDurationSeconds(durationSeconds) : 'Unknown'}`);
+
+    // Video processing (same as legacy)
+    const originalSizeMb = await statSizeMB(input.videoPath);
+    let videoPathForAnalysis = input.videoPath;
+    let analysisWarning: string | undefined;
+    let useVideoForAnalysis = true;
+    const VIDEO_SIZE_LIMIT_MB = 20;
+
+    if (originalSizeMb > 12) {
+      try {
+        videoPathForAnalysis = await transcodeVideoForAnalysis(input.videoPath);
+      } catch {
+        if (originalSizeMb <= VIDEO_SIZE_LIMIT_MB) {
+          analysisWarning = 'Video compression failed; using original.';
+        } else {
+          useVideoForAnalysis = false;
+          analysisWarning = 'Video compression failed; using audio-only.';
+        }
+      }
+    }
+
+    // ----------------------------
+    // Audio extraction and transcription (using OpenRouter like legacy)
+    // ----------------------------
+    const audioPath = await extractAudioWavForAnalysis(videoPathForAnalysis);
+    const audioDurationSeconds = await getAudioDurationSeconds(audioPath).catch(() => 0);
+    const audioBase64 = await encodeAudioToBase64(audioPath);
+    console.log(
+      `   🔊 Audio extracted: ${path.basename(audioPath)} (${(audioBase64.length / (1024 * 1024)).toFixed(2)} MB base64)` +
+        (audioDurationSeconds > 0 ? `, duration=${formatDurationSeconds(audioDurationSeconds)}` : '')
+    );
+
+    const transcribePrompt = `
+You are a speech-to-text transcription engine.
+Transcribe the spoken audio as accurately as possible.
+
+Rules:
+- Return ONLY valid JSON: {"transcript":"..."}
+- If no usable speech is present, return {"transcript":""}
+- Do not add commentary, headings, or extra keys.
+    `.trim();
+
+    const transcribeModels = getTranscribeModelCandidates(process.env.TRANSCRIBE_MODEL, modelName);
+    const tryTranscribeBase64WithModel = async (model: string, b64: string): Promise<string> => {
+      // Try OpenAI-style audio part first.
+      try {
+        const result = await callOpenRouterJson({
+          apiKey,
+          model,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: transcribePrompt },
+                { type: 'input_audio', input_audio: { data: b64, format: 'wav' } },
+              ],
+            },
+          ],
+          maxTokens: 4000,
+          sampling: TRANSCRIBE_SAMPLING,
+          schemaForRepair: `{"transcript":"<full transcribed text>"}`,
+        });
+        return typeof result.data?.transcript === 'string' ? result.data.transcript : '';
+      } catch (e) {
+        // Fallback: some providers expect audio_url data URL
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`⚠️ input_audio transcription failed for model=${model} (${msg}). Retrying with audio_url...`);
+        const result = await callOpenRouterJson({
+          apiKey,
+          model,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: transcribePrompt },
+                { type: 'audio_url', audio_url: { url: `data:audio/wav;base64,${b64}` } },
+              ],
+            },
+          ],
+          maxTokens: 4000,
+          sampling: TRANSCRIBE_SAMPLING,
+          schemaForRepair: `{"transcript":"<full transcribed text>"}`,
+        });
+        return typeof result.data?.transcript === 'string' ? result.data.transcript : '';
+      }
+    };
+
+    const transcribeWithFallback = async (b64: string): Promise<{ transcript: string; modelUsed: string }> => {
+      let lastModel = transcribeModels[transcribeModels.length - 1] || modelName;
+      for (const m of transcribeModels) {
+        lastModel = m;
+        try {
+          const txt = (await tryTranscribeBase64WithModel(m, b64)).trim();
+          if (txt) return { transcript: txt, modelUsed: m };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`⚠️ Transcription attempt failed for model=${m} (${msg})`);
+        }
+      }
+      return { transcript: '', modelUsed: lastModel };
+    };
+
+    const { transcript: firstTranscript, modelUsed: transcribeModelUsed } = await transcribeWithFallback(audioBase64);
+    let transcript = firstTranscript.trim();
+    let transcriptWordCount = countWords(transcript);
+    console.log(`   📝 Transcript words (single-pass): ${transcriptWordCount} [model=${transcribeModelUsed}]`);
+
+    // If we have a long recording but got a tiny transcript, retry by chunking.
+    const audioBytes = await fs.promises.stat(audioPath).then((s) => s.size).catch(() => 0);
+    const audioDurationEstimated = audioBytes > 0 ? estimateWavDurationSecondsFromBytes(audioBytes) : 0;
+    const audioDurationBest = audioDurationSeconds > 0 ? audioDurationSeconds : audioDurationEstimated;
+    const shouldTryChunking =
+      transcriptWordCount < 25 &&
+      audioDurationBest >= 20;
+
+    if (shouldTryChunking) {
+      const chunkSeconds = Number(process.env.TRANSCRIBE_CHUNK_SECONDS || 30);
+      console.warn(
+        `⚠️ Transcript seems truncated (${transcriptWordCount} words, audio=${formatDurationSeconds(audioDurationBest)}). ` +
+          `Retrying transcription in ~${Math.max(5, Math.floor(chunkSeconds))}s chunks...`
+      );
+
+      try {
+        const chunkPaths = await splitAudioIntoChunks(audioPath, chunkSeconds);
+        const parts: string[] = [];
+        for (let i = 0; i < chunkPaths.length; i++) {
+          const p = chunkPaths[i];
+          const b64 = await encodeAudioToBase64(p);
+          const { transcript: chunkText } = await transcribeWithFallback(b64);
+          if (chunkText) parts.push(chunkText);
+        }
+        const combined = parts.join(' ').replace(/\s+/g, ' ').trim();
+        const combinedWc = countWords(combined);
+        console.log(`   📝 Transcript words (chunked): ${combinedWc}`);
+        if (combinedWc > transcriptWordCount) {
+          transcript = combined;
+          transcriptWordCount = combinedWc;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`⚠️ Chunked transcription failed (${msg}). Proceeding with single-pass transcript.`);
+      }
+    }
+
+    if (!transcript) {
+      return {
+        success: false,
+        transcript: '',
+        error: 'Transcription failed - no speech detected or API issue. Please check your microphone.',
+      };
+    }
+
+    // Compute metrics (transcriptWordCount already computed above during transcription)
+    const { total: fillerTotal, breakdown: fillerBreakdown } = countFillers(transcript);
+    const durationSecondsActual = durationSeconds && durationSeconds > 0 ? durationSeconds : (input.durationSecondsHint || 1);
+    const wpm = Math.round((transcriptWordCount / Math.max(durationSecondsActual, 1)) * 60);
+    const fillerPerMin = Number(((fillerTotal / Math.max(durationSecondsActual, 1)) * 60).toFixed(1));
+    const durationText = formatDurationSeconds(durationSecondsActual);
+
+    // Transcript integrity
+    const transcriptIntegrity = computeTranscriptIntegrity(transcript);
+    console.log(`   🔐 Transcript: ${transcriptIntegrity.wordCount} words, ${transcriptIntegrity.charLen} chars`);
+
+    // Heuristic pre-check
+    const heuristicResult = classifyTranscriptHeuristic(transcript, input.theme, input.quote);
+    console.log(`   🔍 Heuristic: ${heuristicResult.classification} (skipLLM=${heuristicResult.skipLLM})`);
+
+    // If heuristic says skip LLM, return capped analysis
+    if (heuristicResult.skipLLM) {
+      const classification = heuristicResult.classification as 'too_short' | 'nonsense' | 'off_topic';
+      const championshipAnalysis = buildInsufficientChampionshipAnalysis(
+        input.theme,
+        input.quote,
+        transcript,
+        durationSecondsActual,
+        transcriptWordCount,
+        wpm,
+        fillerTotal,
+        fillerPerMin,
+        classification,
+        heuristicResult.reason,
+        modelName
+      );
+
+      console.warn(`⚠️ Heuristic pre-check triggered. Classification: ${classification}`);
+      return {
+        success: true,
+        transcript,
+        championshipAnalysis,
+        transcriptIntegrity,
+      };
+    }
+
+    // Build the championship prompt
+    const transcriptTimecoded = buildEstimatedTimecodedTranscript(transcript, durationSecondsActual, 36);
+    const championshipPrompt = buildChampionshipJudgePrompt(
+      input.theme,
+      input.quote,
+      transcriptTimecoded,
+      durationSecondsActual,
+      durationText,
+      transcriptWordCount,
+      wpm,
+      fillerTotal,
+      fillerPerMin,
+      null // pausesPerMin not available
+    );
+
+    // Call the LLM
+    let parseMetrics: ParseMetrics = { parseFailCount: 0, repairUsed: false };
+    let analysis: any;
+
+    try {
+      const judgeResult = await callOpenRouterJson({
+        apiKey,
+        model: modelName,
+        messages: [{ role: 'user', content: [{ type: 'text', text: championshipPrompt }] }],
+        maxTokens: 12000, // Championship format is larger
+        sampling: JUDGE_SAMPLING,
+        schemaForRepair: CHAMPIONSHIP_SCHEMA_FOR_REPAIR,
+      });
+
+      analysis = judgeResult.data;
+      parseMetrics = judgeResult.parseMetrics;
+
+      if (parseMetrics.repairUsed) {
+        console.log(`   🔧 Parse repair was used for championship output`);
+      }
+    } catch (judgeError) {
+      if (judgeError instanceof JsonParseError) {
+        console.error(`❌ Championship judge returned invalid JSON`);
+        return {
+          success: false,
+          transcript,
+          error: 'Analysis failed: Model returned invalid JSON.',
+          errorDetails: {
+            type: 'parse_failure',
+            message: judgeError.message,
+            rawModelOutput: judgeError.rawOutput,
+          },
+          transcriptIntegrity,
+          parseMetrics: {
+            parseFailCount: judgeError.parseFailCount,
+            repairUsed: judgeError.repairAttempted,
+            rawOutput: judgeError.rawOutput,
+          },
+        };
+      }
+      throw judgeError;
+    }
+
+    // Cast to ChampionshipAnalysis and apply server-side corrections
+    const championshipAnalysis = analysis as ChampionshipAnalysis;
+
+    // Set version
+    championshipAnalysis.version = 'championship-v1';
+
+    // Set meta
+    championshipAnalysis.meta = {
+      roundType: 'impromptu',
+      theme: input.theme,
+      quote: input.quote,
+      model: modelName,
+      generatedAt: new Date().toISOString(),
+    };
+
+    // Override speechStats with computed values
+    championshipAnalysis.speechStats = {
+      durationSec: durationSecondsActual,
+      durationText,
+      wordCount: transcriptWordCount,
+      wpm,
+      fillerWordCount: fillerTotal,
+      fillerPerMin,
+      pausesPerMin: null,
+    };
+
+    // Set speechRecord
+    championshipAnalysis.speechRecord = {
+      transcript,
+      timecodeNote: 'Timecodes are estimated based on word position',
+    };
+
+    // Update delivery metrics snapshot
+    if (championshipAnalysis.deliveryMetricsCoaching?.snapshot) {
+      championshipAnalysis.deliveryMetricsCoaching.snapshot = {
+        wpm,
+        fillerPerMin,
+        durationText,
+        wordCount: transcriptWordCount,
+        pausesPerMin: null,
+      };
+    }
+
+    // Recompute weighted scores (server-side truth)
+    recomputeChampionshipScoresInPlace(championshipAnalysis);
+
+    // Apply classification caps
+    enforceChampionshipCapsInPlace(championshipAnalysis);
+
+    // Also apply heuristic caps if needed
+    if (heuristicResult.maxOverallScore < 10.0) {
+      if (championshipAnalysis.scoring.overallScore > heuristicResult.maxOverallScore) {
+        championshipAnalysis.scoring.overallScore = heuristicResult.maxOverallScore;
+        championshipAnalysis.classification.capsApplied = true;
+        championshipAnalysis.classification.maxOverallScore = heuristicResult.maxOverallScore;
+        console.log(`   🔒 Heuristic cap applied: max ${heuristicResult.maxOverallScore}`);
+      }
+    }
+
+    // Enforce tournament readiness
+    enforceChampionshipTournamentReadiness(championshipAnalysis, fillerPerMin, durationSecondsActual);
+
+    // Recalculate tier after all caps
+    championshipAnalysis.scoring.performanceTier = computeChampionshipTier(championshipAnalysis.scoring.overallScore);
+
+    // Ensure warnings array exists
+    if (!Array.isArray(championshipAnalysis.warnings)) {
+      championshipAnalysis.warnings = [];
+    }
+
+    // Add any analysis warnings
+    if (analysisWarning) {
+      championshipAnalysis.warnings.push(analysisWarning);
+    }
+
+    console.log('✅ Championship analysis successful!');
+    console.log(`   Score: ${championshipAnalysis.scoring.overallScore} (${championshipAnalysis.scoring.performanceTier})`);
+
+    return {
+      success: true,
+      transcript,
+      championshipAnalysis,
+      transcriptIntegrity,
+      parseMetrics,
+      ...(analysisWarning ? { analysisWarning } : {}),
+    };
+
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('❌ Championship analysis failed:', msg);
     return {
       success: false,
       transcript: '',
